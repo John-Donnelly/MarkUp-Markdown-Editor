@@ -469,10 +469,23 @@ public sealed partial class MainWindow : Window
         try
         {
             var printHtml = MarkdownParser.ToHtmlForPrint(_document.Content, _document.DisplayName);
-            PrintWebView.NavigateToString(printHtml);
 
-            // Wait a moment for rendering
-            await Task.Delay(500);
+            // Navigate and wait for the page to fully load before exporting
+            var navigationTcs = new TaskCompletionSource<bool>();
+            void OnNavigationCompleted(WebView2 s, Microsoft.Web.WebView2.Core.CoreWebView2NavigationCompletedEventArgs a)
+            {
+                navigationTcs.TrySetResult(a.IsSuccess);
+            }
+            PrintWebView.NavigationCompleted += OnNavigationCompleted;
+            PrintWebView.NavigateToString(printHtml);
+            var navSuccess = await navigationTcs.Task;
+            PrintWebView.NavigationCompleted -= OnNavigationCompleted;
+
+            if (!navSuccess)
+            {
+                await ShowErrorAsync("PDF Export", "Failed to prepare content for PDF export.");
+                return;
+            }
 
             var printSettings = PrintWebView.CoreWebView2.Environment.CreatePrintSettings();
             printSettings.ShouldPrintBackgrounds = true;
@@ -503,10 +516,29 @@ public sealed partial class MainWindow : Window
         try
         {
             var printHtml = MarkdownParser.ToHtmlForPrint(_document.Content, _document.DisplayName);
+
+            // Navigate and wait for the page to fully load before printing
+            var navigationTcs = new TaskCompletionSource<bool>();
+            void OnNavigationCompleted(WebView2 s, Microsoft.Web.WebView2.Core.CoreWebView2NavigationCompletedEventArgs a)
+            {
+                navigationTcs.TrySetResult(a.IsSuccess);
+            }
+            PrintWebView.NavigationCompleted += OnNavigationCompleted;
             PrintWebView.NavigateToString(printHtml);
-            await Task.Delay(500);
-            await PrintWebView.CoreWebView2.ExecuteScriptAsync("document.title = '" + _document.DisplayName.Replace("'", "\\'" ) + "'");
-            await PrintWebView.CoreWebView2.ExecuteScriptAsync("window.print()");
+            var navSuccess = await navigationTcs.Task;
+            PrintWebView.NavigationCompleted -= OnNavigationCompleted;
+
+            if (!navSuccess)
+            {
+                await ShowErrorAsync("Print", "Failed to prepare print content.");
+                return;
+            }
+
+            await PrintWebView.CoreWebView2.ExecuteScriptAsync(
+                "document.title = '" + _document.DisplayName.Replace("'", "\\'") + "'");
+
+            // Use the native WebView2 print UI instead of JavaScript window.print()
+            PrintWebView.CoreWebView2.ShowPrintUI(CoreWebView2PrintDialogKind.Browser);
         }
         catch (Exception ex)
         {
