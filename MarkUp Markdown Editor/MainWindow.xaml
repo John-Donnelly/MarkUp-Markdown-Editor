@@ -7,13 +7,365 @@
     xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     mc:Ignorable="d"
-    Title="MarkUp Markdown Editor">
+    Title="Untitled — MarkUp">
 
     <Window.SystemBackdrop>
         <MicaBackdrop />
     </Window.SystemBackdrop>
 
     <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
 
+        <!-- Title Bar / Menu Bar -->
+        <MenuBar Grid.Row="0" Margin="0,0,0,0">
+            <MenuBarItem Title="File">
+                <MenuFlyoutItem x:Name="MenuNew" Text="New" Click="MenuNew_Click">
+                    <MenuFlyoutItem.KeyboardAccelerators>
+                        <KeyboardAccelerator Modifiers="Control" Key="N" />
+                    </MenuFlyoutItem.KeyboardAccelerators>
+                </MenuFlyoutItem>
+                <MenuFlyoutItem x:Name="MenuOpen" Text="Open..." Click="MenuOpen_Click">
+                    <MenuFlyoutItem.KeyboardAccelerators>
+                        <KeyboardAccelerator Modifiers="Control" Key="O" />
+                    </MenuFlyoutItem.KeyboardAccelerators>
+                </MenuFlyoutItem>
+                <MenuFlyoutSeparator />
+                <MenuFlyoutItem x:Name="MenuSave" Text="Save" Click="MenuSave_Click">
+                    <MenuFlyoutItem.KeyboardAccelerators>
+                        <KeyboardAccelerator Modifiers="Control" Key="S" />
+                    </MenuFlyoutItem.KeyboardAccelerators>
+                </MenuFlyoutItem>
+                <MenuFlyoutItem x:Name="MenuSaveAs" Text="Save As..." Click="MenuSaveAs_Click">
+                    <MenuFlyoutItem.KeyboardAccelerators>
+                        <KeyboardAccelerator Modifiers="Control,Shift" Key="S" />
+                    </MenuFlyoutItem.KeyboardAccelerators>
+                </MenuFlyoutItem>
+                <MenuFlyoutSeparator />
+                <MenuFlyoutSubItem Text="Export">
+                    <MenuFlyoutItem x:Name="MenuExportHtml" Text="Export as HTML..." Click="MenuExportHtml_Click" />
+                    <MenuFlyoutItem x:Name="MenuExportPlainText" Text="Export as Plain Text..." Click="MenuExportPlainText_Click" />
+                    <MenuFlyoutItem x:Name="MenuExportPdf" Text="Export as PDF..." Click="MenuExportPdf_Click" />
+                </MenuFlyoutSubItem>
+                <MenuFlyoutSeparator />
+                <MenuFlyoutItem x:Name="MenuPrint" Text="Print..." Click="MenuPrint_Click">
+                    <MenuFlyoutItem.KeyboardAccelerators>
+                        <KeyboardAccelerator Modifiers="Control" Key="P" />
+                    </MenuFlyoutItem.KeyboardAccelerators>
+                </MenuFlyoutItem>
+                <MenuFlyoutSeparator />
+                <MenuFlyoutItem x:Name="MenuExit" Text="Exit" Click="MenuExit_Click">
+                    <MenuFlyoutItem.KeyboardAccelerators>
+                        <KeyboardAccelerator Modifiers="Menu" Key="F4" />
+                    </MenuFlyoutItem.KeyboardAccelerators>
+                </MenuFlyoutItem>
+            </MenuBarItem>
+
+            <MenuBarItem Title="Edit">
+                <MenuFlyoutItem x:Name="MenuUndo" Text="Undo" Click="MenuUndo_Click">
+                    <MenuFlyoutItem.KeyboardAccelerators>
+                        <KeyboardAccelerator Modifiers="Control" Key="Z" />
+                    </MenuFlyoutItem.KeyboardAccelerators>
+                </MenuFlyoutItem>
+                <MenuFlyoutItem x:Name="MenuRedo" Text="Redo" Click="MenuRedo_Click">
+                    <MenuFlyoutItem.KeyboardAccelerators>
+                        <KeyboardAccelerator Modifiers="Control" Key="Y" />
+                    </MenuFlyoutItem.KeyboardAccelerators>
+                </MenuFlyoutItem>
+                <MenuFlyoutSeparator />
+                <MenuFlyoutItem x:Name="MenuCut" Text="Cut" Click="MenuCut_Click">
+                    <MenuFlyoutItem.KeyboardAccelerators>
+                        <KeyboardAccelerator Modifiers="Control" Key="X" />
+                    </MenuFlyoutItem.KeyboardAccelerators>
+                </MenuFlyoutItem>
+                <MenuFlyoutItem x:Name="MenuCopy" Text="Copy" Click="MenuCopy_Click">
+                    <MenuFlyoutItem.KeyboardAccelerators>
+                        <KeyboardAccelerator Modifiers="Control" Key="C" />
+                    </MenuFlyoutItem.KeyboardAccelerators>
+                </MenuFlyoutItem>
+                <MenuFlyoutItem x:Name="MenuPaste" Text="Paste" Click="MenuPaste_Click">
+                    <MenuFlyoutItem.KeyboardAccelerators>
+                        <KeyboardAccelerator Modifiers="Control" Key="V" />
+                    </MenuFlyoutItem.KeyboardAccelerators>
+                </MenuFlyoutItem>
+                <MenuFlyoutSeparator />
+                <MenuFlyoutItem x:Name="MenuSelectAll" Text="Select All" Click="MenuSelectAll_Click">
+                    <MenuFlyoutItem.KeyboardAccelerators>
+                        <KeyboardAccelerator Modifiers="Control" Key="A" />
+                    </MenuFlyoutItem.KeyboardAccelerators>
+                </MenuFlyoutItem>
+                <MenuFlyoutSeparator />
+                <MenuFlyoutItem x:Name="MenuFind" Text="Find &amp; Replace..." Click="MenuFind_Click">
+                    <MenuFlyoutItem.KeyboardAccelerators>
+                        <KeyboardAccelerator Modifiers="Control" Key="H" />
+                    </MenuFlyoutItem.KeyboardAccelerators>
+                </MenuFlyoutItem>
+            </MenuBarItem>
+
+            <MenuBarItem Title="Format">
+                <MenuFlyoutItem x:Name="MenuBold" Text="Bold" Click="MenuBold_Click">
+                    <MenuFlyoutItem.KeyboardAccelerators>
+                        <KeyboardAccelerator Modifiers="Control" Key="B" />
+                    </MenuFlyoutItem.KeyboardAccelerators>
+                </MenuFlyoutItem>
+                <MenuFlyoutItem x:Name="MenuItalic" Text="Italic" Click="MenuItalic_Click">
+                    <MenuFlyoutItem.KeyboardAccelerators>
+                        <KeyboardAccelerator Modifiers="Control" Key="I" />
+                    </MenuFlyoutItem.KeyboardAccelerators>
+                </MenuFlyoutItem>
+                <MenuFlyoutItem x:Name="MenuStrikethrough" Text="Strikethrough" Click="MenuStrikethrough_Click" />
+                <MenuFlyoutItem x:Name="MenuInlineCode" Text="Inline Code" Click="MenuInlineCode_Click">
+                    <MenuFlyoutItem.KeyboardAccelerators>
+                        <KeyboardAccelerator Modifiers="Control" Key="E" />
+                    </MenuFlyoutItem.KeyboardAccelerators>
+                </MenuFlyoutItem>
+                <MenuFlyoutSeparator />
+                <MenuFlyoutSubItem Text="Heading">
+                    <MenuFlyoutItem Text="Heading 1" Click="MenuHeading1_Click" />
+                    <MenuFlyoutItem Text="Heading 2" Click="MenuHeading2_Click" />
+                    <MenuFlyoutItem Text="Heading 3" Click="MenuHeading3_Click" />
+                    <MenuFlyoutItem Text="Heading 4" Click="MenuHeading4_Click" />
+                    <MenuFlyoutItem Text="Heading 5" Click="MenuHeading5_Click" />
+                    <MenuFlyoutItem Text="Heading 6" Click="MenuHeading6_Click" />
+                </MenuFlyoutSubItem>
+                <MenuFlyoutSeparator />
+                <MenuFlyoutItem x:Name="MenuUnorderedList" Text="Bullet List" Click="MenuUnorderedList_Click" />
+                <MenuFlyoutItem x:Name="MenuOrderedList" Text="Numbered List" Click="MenuOrderedList_Click" />
+                <MenuFlyoutItem x:Name="MenuTaskList" Text="Task List" Click="MenuTaskList_Click" />
+                <MenuFlyoutSeparator />
+                <MenuFlyoutItem x:Name="MenuBlockquote" Text="Blockquote" Click="MenuBlockquote_Click" />
+                <MenuFlyoutItem x:Name="MenuCodeBlock" Text="Code Block" Click="MenuCodeBlock_Click" />
+                <MenuFlyoutItem x:Name="MenuHorizontalRule" Text="Horizontal Rule" Click="MenuHorizontalRule_Click" />
+                <MenuFlyoutSeparator />
+                <MenuFlyoutItem x:Name="MenuInsertLink" Text="Insert Link" Click="MenuInsertLink_Click">
+                    <MenuFlyoutItem.KeyboardAccelerators>
+                        <KeyboardAccelerator Modifiers="Control" Key="K" />
+                    </MenuFlyoutItem.KeyboardAccelerators>
+                </MenuFlyoutItem>
+                <MenuFlyoutItem x:Name="MenuInsertImage" Text="Insert Image" Click="MenuInsertImage_Click" />
+                <MenuFlyoutItem x:Name="MenuInsertTable" Text="Insert Table" Click="MenuInsertTable_Click" />
+            </MenuBarItem>
+
+            <MenuBarItem Title="View">
+                <MenuFlyoutItem x:Name="MenuViewEditor" Text="Editor Only" Click="MenuViewEditor_Click" />
+                <MenuFlyoutItem x:Name="MenuViewPreview" Text="Preview Only" Click="MenuViewPreview_Click" />
+                <MenuFlyoutItem x:Name="MenuViewSplit" Text="Split View" Click="MenuViewSplit_Click" />
+                <MenuFlyoutSeparator />
+                <MenuFlyoutItem x:Name="MenuToggleWordWrap" Text="Toggle Word Wrap" Click="MenuToggleWordWrap_Click" />
+                <MenuFlyoutSeparator />
+                <MenuFlyoutItem x:Name="MenuZoomIn" Text="Zoom In" Click="MenuZoomIn_Click">
+                    <MenuFlyoutItem.KeyboardAccelerators>
+                        <KeyboardAccelerator Modifiers="Control" Key="Add" />
+                    </MenuFlyoutItem.KeyboardAccelerators>
+                </MenuFlyoutItem>
+                <MenuFlyoutItem x:Name="MenuZoomOut" Text="Zoom Out" Click="MenuZoomOut_Click">
+                    <MenuFlyoutItem.KeyboardAccelerators>
+                        <KeyboardAccelerator Modifiers="Control" Key="Subtract" />
+                    </MenuFlyoutItem.KeyboardAccelerators>
+                </MenuFlyoutItem>
+                <MenuFlyoutItem x:Name="MenuZoomReset" Text="Reset Zoom" Click="MenuZoomReset_Click" />
+                <MenuFlyoutSeparator />
+                <MenuFlyoutItem x:Name="MenuToggleStatusBar" Text="Toggle Status Bar" Click="MenuToggleStatusBar_Click" />
+            </MenuBarItem>
+
+            <MenuBarItem Title="Help">
+                <MenuFlyoutItem x:Name="MenuMarkdownRef" Text="Markdown Reference" Click="MenuMarkdownRef_Click" />
+                <MenuFlyoutSeparator />
+                <MenuFlyoutItem x:Name="MenuAbout" Text="About MarkUp" Click="MenuAbout_Click" />
+            </MenuBarItem>
+        </MenuBar>
+
+        <!-- Toolbar -->
+        <CommandBar Grid.Row="1" DefaultLabelPosition="Collapsed" IsOpen="False" Margin="4,0,4,0" HorizontalAlignment="Left">
+            <AppBarButton x:Name="ToolbarNew" Icon="Page2" Label="New" ToolTipService.ToolTip="New (Ctrl+N)" Click="MenuNew_Click" />
+            <AppBarButton x:Name="ToolbarOpen" Icon="OpenFile" Label="Open" ToolTipService.ToolTip="Open (Ctrl+O)" Click="MenuOpen_Click" />
+            <AppBarButton x:Name="ToolbarSave" Icon="Save" Label="Save" ToolTipService.ToolTip="Save (Ctrl+S)" Click="MenuSave_Click" />
+            <AppBarSeparator />
+            <AppBarButton x:Name="ToolbarUndo" Icon="Undo" Label="Undo" ToolTipService.ToolTip="Undo (Ctrl+Z)" Click="MenuUndo_Click" />
+            <AppBarButton x:Name="ToolbarRedo" Icon="Redo" Label="Redo" ToolTipService.ToolTip="Redo (Ctrl+Y)" Click="MenuRedo_Click" />
+            <AppBarSeparator />
+            <AppBarButton x:Name="ToolbarBold" Label="Bold" ToolTipService.ToolTip="Bold (Ctrl+B)" Click="MenuBold_Click">
+                <AppBarButton.Icon>
+                    <FontIcon Glyph="&#xE8DD;" />
+                </AppBarButton.Icon>
+            </AppBarButton>
+            <AppBarButton x:Name="ToolbarItalic" Label="Italic" ToolTipService.ToolTip="Italic (Ctrl+I)" Click="MenuItalic_Click">
+                <AppBarButton.Icon>
+                    <FontIcon Glyph="&#xE8DB;" />
+                </AppBarButton.Icon>
+            </AppBarButton>
+            <AppBarButton x:Name="ToolbarStrikethrough" Label="Strikethrough" ToolTipService.ToolTip="Strikethrough" Click="MenuStrikethrough_Click">
+                <AppBarButton.Icon>
+                    <FontIcon Glyph="&#xEDE0;" />
+                </AppBarButton.Icon>
+            </AppBarButton>
+            <AppBarButton x:Name="ToolbarCode" Label="Code" ToolTipService.ToolTip="Inline Code (Ctrl+E)" Click="MenuInlineCode_Click">
+                <AppBarButton.Icon>
+                    <FontIcon Glyph="&#xE943;" />
+                </AppBarButton.Icon>
+            </AppBarButton>
+            <AppBarSeparator />
+            <AppBarButton x:Name="ToolbarBulletList" Label="Bullet List" ToolTipService.ToolTip="Bullet List" Click="MenuUnorderedList_Click">
+                <AppBarButton.Icon>
+                    <FontIcon Glyph="&#xE8FD;" />
+                </AppBarButton.Icon>
+            </AppBarButton>
+            <AppBarButton x:Name="ToolbarNumberList" Label="Numbered List" ToolTipService.ToolTip="Numbered List" Click="MenuOrderedList_Click">
+                <AppBarButton.Icon>
+                    <FontIcon Glyph="&#xE9D5;" />
+                </AppBarButton.Icon>
+            </AppBarButton>
+            <AppBarButton x:Name="ToolbarLink" Label="Link" ToolTipService.ToolTip="Insert Link (Ctrl+K)" Click="MenuInsertLink_Click">
+                <AppBarButton.Icon>
+                    <FontIcon Glyph="&#xE71B;" />
+                </AppBarButton.Icon>
+            </AppBarButton>
+            <AppBarButton x:Name="ToolbarImage" Label="Image" ToolTipService.ToolTip="Insert Image" Click="MenuInsertImage_Click">
+                <AppBarButton.Icon>
+                    <FontIcon Glyph="&#xE91B;" />
+                </AppBarButton.Icon>
+            </AppBarButton>
+            <AppBarButton x:Name="ToolbarTable" Label="Table" ToolTipService.ToolTip="Insert Table" Click="MenuInsertTable_Click">
+                <AppBarButton.Icon>
+                    <FontIcon Glyph="&#xE80A;" />
+                </AppBarButton.Icon>
+            </AppBarButton>
+            <AppBarSeparator />
+            <AppBarButton x:Name="ToolbarPrint" Icon="Print" Label="Print" ToolTipService.ToolTip="Print (Ctrl+P)" Click="MenuPrint_Click" />
+
+            <CommandBar.SecondaryCommands>
+                <AppBarButton Label="Font Settings..." Click="ToolbarFontSettings_Click">
+                    <AppBarButton.Icon>
+                        <FontIcon Glyph="&#xE8D2;" />
+                    </AppBarButton.Icon>
+                </AppBarButton>
+            </CommandBar.SecondaryCommands>
+        </CommandBar>
+
+        <!-- Main Content: Editor + Preview -->
+        <Grid Grid.Row="2">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition x:Name="EditorColumn" Width="*" MinWidth="100" />
+                <ColumnDefinition x:Name="SplitterColumn" Width="Auto" />
+                <ColumnDefinition x:Name="PreviewColumn" Width="*" MinWidth="100" />
+            </Grid.ColumnDefinitions>
+
+            <!-- Markdown Editor -->
+            <Grid Grid.Column="0" x:Name="EditorPanel">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                </Grid.RowDefinitions>
+
+                <TextBlock Grid.Row="0" Text="EDITOR" FontSize="11" FontWeight="SemiBold"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                           Margin="12,6,12,2" />
+
+                <TextBox x:Name="EditorTextBox"
+                         Grid.Row="1"
+                         AcceptsReturn="True"
+                         TextWrapping="Wrap"
+                         IsSpellCheckEnabled="True"
+                         FontFamily="Cascadia Code, Consolas, Courier New"
+                         FontSize="14"
+                         Padding="12,8,12,8"
+                         BorderThickness="0"
+                         Background="Transparent"
+                         ScrollViewer.VerticalScrollBarVisibility="Auto"
+                         ScrollViewer.HorizontalScrollBarVisibility="Auto"
+                         TextChanged="EditorTextBox_TextChanged"
+                         SelectionChanged="EditorTextBox_SelectionChanged"
+                         PlaceholderText="Start typing Markdown here..." />
+            </Grid>
+
+            <!-- Splitter -->
+            <Border Grid.Column="1" x:Name="SplitterBorder" Width="6" Background="Transparent"
+                    PointerPressed="Splitter_PointerPressed"
+                    PointerMoved="Splitter_PointerMoved" PointerReleased="Splitter_PointerReleased"
+                    PointerEntered="Splitter_PointerEntered" PointerExited="Splitter_PointerExited">
+                <Rectangle Width="2" Fill="{ThemeResource DividerStrokeColorDefaultBrush}" 
+                           VerticalAlignment="Stretch" HorizontalAlignment="Center" RadiusX="1" RadiusY="1" />
+            </Border>
+
+            <!-- Preview -->
+            <Grid Grid.Column="2" x:Name="PreviewPanel">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                </Grid.RowDefinitions>
+
+                <TextBlock Grid.Row="0" Text="PREVIEW / EDIT" FontSize="11" FontWeight="SemiBold"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                           Margin="12,6,12,2" />
+
+                <WebView2 x:Name="PreviewWebView" Grid.Row="1" DefaultBackgroundColor="Transparent" />
+            </Grid>
+        </Grid>
+
+        <!-- Hidden WebView2 for background print/PDF operations -->
+        <WebView2 x:Name="PrintWebView" Visibility="Collapsed" Width="0" Height="0" />
+
+        <!-- Status Bar -->
+        <Border x:Name="StatusBar" Grid.Row="3" 
+                Background="{ThemeResource CardBackgroundFillColorSecondaryBrush}"
+                BorderBrush="{ThemeResource DividerStrokeColorDefaultBrush}"
+                BorderThickness="0,1,0,0" Padding="12,4,12,4">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+
+                <TextBlock x:Name="StatusBarStats" Grid.Column="0" FontSize="12"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                           VerticalAlignment="Center" Text="Words: 0  |  Characters: 0  |  Lines: 0" />
+
+                <Border Grid.Column="1" Width="1" Margin="12,0" VerticalAlignment="Stretch"
+                        Background="{ThemeResource DividerStrokeColorDefaultBrush}" />
+
+                <TextBlock x:Name="StatusBarPosition" Grid.Column="2" FontSize="12"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                           VerticalAlignment="Center" Text="Ln 1, Col 1" />
+
+                <TextBlock x:Name="StatusBarEncoding" Grid.Column="3" FontSize="12"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                           VerticalAlignment="Center" Text="UTF-8" Margin="12,0,0,0" />
+
+                <TextBlock x:Name="StatusBarZoom" Grid.Column="4" FontSize="12"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                           VerticalAlignment="Center" Text="100%" Margin="12,0,0,0" />
+            </Grid>
+        </Border>
+
+        <!-- Find & Replace Bar (hidden by default) -->
+        <Border x:Name="FindReplaceBar" Grid.Row="2" VerticalAlignment="Top" HorizontalAlignment="Right"
+                Background="{ThemeResource AcrylicBackgroundFillColorDefaultBrush}"
+                BorderBrush="{ThemeResource SurfaceStrokeColorDefaultBrush}"
+                BorderThickness="1" CornerRadius="0,0,6,6" Padding="12,8"
+                Margin="0,0,16,0" Visibility="Collapsed">
+            <StackPanel Spacing="6">
+                <StackPanel Orientation="Horizontal" Spacing="4">
+                    <TextBox x:Name="FindTextBox" PlaceholderText="Find..." Width="200" Height="32" />
+                    <Button x:Name="FindPrevButton" Content="▲" ToolTipService.ToolTip="Find Previous" Click="FindPrev_Click" Width="32" Height="32" Padding="0" />
+                    <Button x:Name="FindNextButton" Content="▼" ToolTipService.ToolTip="Find Next" Click="FindNext_Click" Width="32" Height="32" Padding="0" />
+                    <Button x:Name="CloseFindButton" Content="✕" ToolTipService.ToolTip="Close" Click="CloseFindBar_Click" Width="32" Height="32" Padding="0" />
+                </StackPanel>
+                <StackPanel Orientation="Horizontal" Spacing="4">
+                    <TextBox x:Name="ReplaceTextBox" PlaceholderText="Replace..." Width="200" Height="32" />
+                    <Button x:Name="ReplaceButton" Content="Replace" ToolTipService.ToolTip="Replace" Click="Replace_Click" Height="32" />
+                    <Button x:Name="ReplaceAllButton" Content="All" ToolTipService.ToolTip="Replace All" Click="ReplaceAll_Click" Height="32" />
+                </StackPanel>
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                    <CheckBox x:Name="FindMatchCase" Content="Match case" />
+                </StackPanel>
+            </StackPanel>
+        </Border>
     </Grid>
 </Window>
