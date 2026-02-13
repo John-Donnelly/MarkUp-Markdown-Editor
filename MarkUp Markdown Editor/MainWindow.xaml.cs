@@ -228,7 +228,7 @@ public sealed partial class MainWindow : Window
 
         try
         {
-            var html = MarkdownParser.ToHtml(_document.Content, darkMode: true, editable: true);
+            var html = MarkdownParser.ToHtml(_document.Content, darkMode: true, editable: true, documentTitle: _document.DisplayName);
             PreviewWebView.NavigateToString(html);
         }
         catch
@@ -515,12 +515,8 @@ public sealed partial class MainWindow : Window
 
         try
         {
-            // Set document title for print header, then show the print preview dialog.
-            // The preview HTML already contains @media print rules that switch to
-            // light theme and hide the WYSIWYG toolbar automatically.
-            await PreviewWebView.CoreWebView2.ExecuteScriptAsync(
-                "document.title = '" + _document.DisplayName.Replace("'", "\\'") + "'");
-
+            // The preview HTML already has the document title in its <title> tag,
+            // and @media print CSS rules switch to light theme and hide the toolbar.
             PreviewWebView.CoreWebView2.ShowPrintUI(CoreWebView2PrintDialogKind.Browser);
         }
         catch (Exception ex)
@@ -1141,9 +1137,10 @@ code block
 
         var currentX = e.GetCurrentPoint(Content as UIElement).Position.X;
         var delta = currentX - _splitterStartX;
-        var newEditorWidth = Math.Max(100, _editorStartWidth + delta);
         var totalWidth = EditorColumn.ActualWidth + PreviewColumn.ActualWidth;
-        var newPreviewWidth = Math.Max(100, totalWidth - newEditorWidth);
+        var minWidth = totalWidth * 0.20;
+        var newEditorWidth = Math.Clamp(_editorStartWidth + delta, minWidth, totalWidth - minWidth);
+        var newPreviewWidth = totalWidth - newEditorWidth;
 
         EditorColumn.Width = new GridLength(newEditorWidth, GridUnitType.Pixel);
         PreviewColumn.Width = new GridLength(newPreviewWidth, GridUnitType.Pixel);
