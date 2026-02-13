@@ -306,4 +306,33 @@ public class MarkdownParserTests
         Assert.IsTrue(result.Contains("#wysiwyg-toolbar"));
         Assert.IsTrue(result.Contains("display: none"));
     }
+
+    [TestMethod]
+    public void ToHtml_WithDocumentTitle_ContainsTitleTag()
+    {
+        var result = MarkdownParser.ToHtml("Hello", darkMode: true, documentTitle: "MyDoc.md");
+        Assert.IsTrue(result.Contains("<title>MyDoc.md</title>"));
+    }
+
+    [TestMethod]
+    public void ToHtml_EmptyDocumentTitle_UsesDefault()
+    {
+        var result = MarkdownParser.ToHtml("Hello", darkMode: true, documentTitle: "");
+        Assert.IsTrue(result.Contains("<title>MarkUp Document</title>"));
+    }
+
+    [TestMethod]
+    public void ToHtml_AnchorLinkScript_ContainsScrollIntoView()
+    {
+        var result = MarkdownParser.ToHtml("Hello", darkMode: true, editable: true);
+        Assert.IsTrue(result.Contains("scrollIntoView"));
+        Assert.IsTrue(result.Contains("startsWith('#')"));
+    }
+
+    [TestMethod]
+    public void ToHtml_NonEditable_AnchorLinkScript_ContainsScrollIntoView()
+    {
+        var result = MarkdownParser.ToHtml("Hello", darkMode: true, editable: false);
+        Assert.IsTrue(result.Contains("scrollIntoView"));
+    }
 }
