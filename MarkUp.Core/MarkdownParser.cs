@@ -15,13 +15,14 @@ public static partial class MarkdownParser
     /// <param name="markdown">The markdown source text.</param>
     /// <param name="darkMode">Whether to use dark mode styling.</param>
     /// <param name="editable">Whether to make the preview body contentEditable (WYSIWYG mode).</param>
-    public static string ToHtml(string markdown, bool darkMode = true, bool editable = false)
+    /// <param name="documentTitle">Optional document title for the HTML title tag (used in print headers/footers).</param>
+    public static string ToHtml(string markdown, bool darkMode = true, bool editable = false, string documentTitle = "")
     {
         if (string.IsNullOrEmpty(markdown))
-            return BuildHtmlPage(string.Empty, darkMode, editable);
+            return BuildHtmlPage(string.Empty, darkMode, editable, documentTitle);
 
         var body = ConvertBody(markdown);
-        return BuildHtmlPage(body, darkMode, editable);
+        return BuildHtmlPage(body, darkMode, editable, documentTitle);
     }
 
     /// <summary>
@@ -344,7 +345,7 @@ public static partial class MarkdownParser
                    .Replace("\"", "&quot;");
     }
 
-    private static string BuildHtmlPage(string bodyHtml, bool darkMode, bool editable = false)
+    private static string BuildHtmlPage(string bodyHtml, bool darkMode, bool editable = false, string documentTitle = "")
     {
         var bg = darkMode ? "#1e1e1e" : "#ffffff";
         var fg = darkMode ? "#d4d4d4" : "#1e1e1e";
@@ -437,11 +438,19 @@ public static partial class MarkdownParser
   });
   document.addEventListener('click', function(e) {
     var link = e.target.closest('a');
-    if (link && e.ctrlKey) {
+    if (!link) return;
+    var href = link.getAttribute('href');
+    if (href && href.startsWith('#')) {
+      e.preventDefault();
+      var target = document.getElementById(href.substring(1));
+      if (target) target.scrollIntoView({ behavior: 'smooth' });
+      return;
+    }
+    if (e.ctrlKey) {
       e.preventDefault();
       e.stopPropagation();
       window.chrome.webview.postMessage(JSON.stringify({ type: 'openLink', url: link.href }));
-    } else if (link) {
+    } else {
       e.preventDefault();
     }
   });
@@ -449,21 +458,32 @@ public static partial class MarkdownParser
 <script>
   document.addEventListener('click', function(e) {
     var link = e.target.closest('a');
-    if (link && e.ctrlKey) {
+    if (!link) return;
+    var href = link.getAttribute('href');
+    if (href && href.startsWith('#')) {
+      e.preventDefault();
+      var target = document.getElementById(href.substring(1));
+      if (target) target.scrollIntoView({ behavior: 'smooth' });
+      return;
+    }
+    if (e.ctrlKey) {
       e.preventDefault();
       e.stopPropagation();
       window.chrome.webview.postMessage(JSON.stringify({ type: 'openLink', url: link.href }));
-    } else if (link) {
+    } else {
       e.preventDefault();
     }
   });
 </script>";
+
+        var safeTitle = string.IsNullOrEmpty(documentTitle) ? "MarkUp Document" : EscapeHtml(documentTitle);
 
         return $@"<!DOCTYPE html>
 <html>
 <head>
 <meta charset=""utf-8"" />
 <meta name=""viewport"" content=""width=device-width, initial-scale=1"" />
+<title>{safeTitle}</title>
 <style>
   * {{ margin: 0; padding: 0; box-sizing: border-box; }}
   body {{
@@ -564,8 +584,9 @@ public static partial class MarkdownParser
   strong {{ font-weight: 700; }}
   {toolbarCss}
   @media print {{
+    @page {{ margin: 0; }}
     #wysiwyg-toolbar {{ display: none !important; }}
-    body {{ background-color: #fff !important; color: #000 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }}
+    body {{ background-color: #fff !important; color: #000 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; padding: 15mm !important; }}
     #editor-body {{ padding: 0 !important; max-width: 100% !important; }}
     h1, h2, h3, h4, h5, h6 {{ color: #000 !important; }}
     h1 {{ border-bottom-color: #ccc !important; }}
