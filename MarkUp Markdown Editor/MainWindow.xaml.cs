@@ -515,13 +515,13 @@ public sealed partial class MainWindow : Window
 
         try
         {
-            // Set document title for print header, then show the system print dialog
+            // Set document title for print header, then show the print preview dialog.
             // The preview HTML already contains @media print rules that switch to
             // light theme and hide the WYSIWYG toolbar automatically.
             await PreviewWebView.CoreWebView2.ExecuteScriptAsync(
                 "document.title = '" + _document.DisplayName.Replace("'", "\\'") + "'");
 
-            PreviewWebView.CoreWebView2.ShowPrintUI(CoreWebView2PrintDialogKind.System);
+            PreviewWebView.CoreWebView2.ShowPrintUI(CoreWebView2PrintDialogKind.Browser);
         }
         catch (Exception ex)
         {
