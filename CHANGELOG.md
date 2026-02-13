@@ -2,6 +2,34 @@
 
 All notable changes to MarkUp Markdown Editor will be documented in this file.
 
+## [1.3.0] - 2025-06-15
+
+### Added
+- **Document title in preview HTML**: `ToHtml()` now accepts a `documentTitle` parameter; the
+  preview HTML includes a `<title>` tag so the document name appears in browser print headers.
+- **Anchor link navigation**: Clicking `#anchor` links in the preview pane now smoothly scrolls
+  to the target heading instead of being blocked.
+- **Resizable split panes**: The centre splitter can be dragged left or right to resize the
+  editor and preview panels. Each panel enforces a minimum width of 20%.
+- **4 new unit tests** covering document title in HTML output, default title fallback, and
+  anchor link scrollIntoView script presence (147 total).
+
+### Fixed
+- **Print footer removed**: Added `@page { margin: 0 }` CSS rule in print media query, which
+  eliminates the browser's header/footer area entirely (removing the `about:blank` footer).
+  Body padding of 15mm preserves content margins on paper.
+- **Print uses browser dialog with preview**: Print now uses `ShowPrintUI(Browser)` on the
+  main `PreviewWebView`, which shows the Chromium print preview dialog with full WYSIWYG
+  preview. `@media print` CSS rules automatically switch to light theme and hide the toolbar.
+- **Window icon**: Uses multi-resolution `.ico` file (16/32/48/256px) instead of `.png` so
+  `AppWindow.SetIcon()` works correctly.
+
+### Changed
+- `MarkdownParser.ToHtml()` signature now includes optional `documentTitle` parameter.
+- `MarkdownParser.BuildHtmlPage()` now emits a `<title>` tag.
+- Splitter minimum width changed from fixed 100px to 20% of available width.
+- Print operation no longer sets `document.title` via JavaScript (title is in HTML).
+
 ## [1.2.0] - 2025-06-14
 
 ### Added

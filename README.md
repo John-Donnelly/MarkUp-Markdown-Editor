@@ -11,7 +11,7 @@ A modern, dark-mode Markdown editor and viewer for Windows, built with WinUI 3 a
 - **Full Markdown Support**: Headings, bold, italic, strikethrough, code blocks, tables, task lists, blockquotes, images, links, and more
 - **Formatting Toolbar**: Left-aligned quick-access toolbar buttons and keyboard shortcuts for all formatting operations
 - **Find & Replace**: Built-in find and replace with case-sensitive matching
-- **Print & Export**: Background printing with correct document title in header — preview panel is never disrupted; print to PDF, export to HTML, and export to plain text with proper font colour management
+- **Print & Export**: Clean printing with no browser headers/footers — preview panel is never disrupted; print to PDF, export to HTML, and export to plain text with proper font colour management
 - **Font Customization**: Configurable editor font family and size
 - **Zoom Controls**: Zoom in/out on the editor
 - **View Modes**: Switch between split view, editor-only, and preview-only
@@ -50,7 +50,7 @@ A modern, dark-mode Markdown editor and viewer for Windows, built with WinUI 3 a
 
 - **MarkUp Markdown Editor** — WinUI 3 application (main project)
 - **MarkUp.Core** — Class library with markdown parsing, formatting, document model, HTML-to-Markdown conversion, and export logic
-- **MarkUp.Tests** — MSTest unit tests for the core library (141 tests)
+- **MarkUp.Tests** — MSTest unit tests for the core library (147 tests)
 
 ## Building
 
