@@ -12,16 +12,22 @@
     <WinUISDKReferences>false</WinUISDKReferences>
     <EnableMsixTooling>true</EnableMsixTooling>
     <Nullable>enable</Nullable>
+    <Version>1.0.0</Version>
+    <AssemblyTitle>MarkUp Markdown Editor</AssemblyTitle>
+    <Company>John Donnelly</Company>
+    <Product>MarkUp Markdown Editor</Product>
+    <Description>A modern dark-mode Markdown editor and viewer for Windows.</Description>
   </PropertyGroup>
-
   <ItemGroup>
     <Content Include="Assets\SplashScreen.scale-200.png" />
     <Content Include="Assets\LockScreenLogo.scale-200.png" />
     <Content Include="Assets\Square150x150Logo.scale-200.png" />
     <Content Include="Assets\Square44x44Logo.scale-200.png" />
     <Content Include="Assets\Square44x44Logo.targetsize-24_altform-unplated.png" />
+    <Content Include="Assets\Square44x44Logo.targetsize-256.png" />
     <Content Include="Assets\StoreLogo.png" />
     <Content Include="Assets\Wide310x150Logo.scale-200.png" />
+    <Content Include="Assets\MarkUp-icon.png" />
   </ItemGroup>
 
   <ItemGroup>
@@ -37,8 +43,13 @@
     <ProjectCapability Include="Msix" />
   </ItemGroup>
   <ItemGroup>
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.3179.45" />
     <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.26100.7705" />
     <PackageReference Include="Microsoft.WindowsAppSDK" Version="1.8.260209005" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\MarkUp.Core\MarkUp.Core.csproj" />
   </ItemGroup>
 
   <!--

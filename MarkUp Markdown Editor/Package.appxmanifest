@@ -38,10 +38,11 @@
         DisplayName="MarkUp Markdown Editor"
         Description="MarkUp Markdown Editor"
         BackgroundColor="transparent"
-        Square150x150Logo="Assets\Square150x150Logo.png"
-        Square44x44Logo="Assets\Square44x44Logo.png">
+        Square150x150Logo="Assets\Square150x150Logo.png" Square44x44Logo="Assets\MarkUp-icon.png">
         <uap:DefaultTile Wide310x150Logo="Assets\Wide310x150Logo.png" />
         <uap:SplashScreen Image="Assets\SplashScreen.png" />
+        <uap:InitialRotationPreference>
+          <uap:Rotation Preference="landscape"/></uap:InitialRotationPreference>
       </uap:VisualElements>
     </Application>
   </Applications>
