@@ -1,0 +1,10 @@
+{
+  "profiles": {
+    "MarkUp Markdown Editor (Package)": {
+      "commandName": "MsixPackage"
+    },
+    "MarkUp Markdown Editor (Unpackaged)": {
+      "commandName": "Project"
+    }
+  }
+}
