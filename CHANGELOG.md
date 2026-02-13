@@ -2,6 +2,20 @@
 
 All notable changes to MarkUp Markdown Editor will be documented in this file.
 
+## [1.3.1] - 2025-06-15
+
+### Fixed
+- **Print footer no longer shows about:blank**: Preview and print content is now served via
+  virtual host URLs (`https://markup.preview/` and `https://markup.print/`) using
+  `WebResourceRequested`, so the page has a real URL instead of `about:blank`.
+- **PDF export footer no longer shows about:blank**: `PrintToPdfAsync` now sets `FooterUri`
+  to a blank space to suppress the URL in the footer. Header title is preserved.
+- **Print margins restored**: Reverted the `@page { margin: 0 }` approach. Normal print
+  margins are used so the browser's header (title, date) and footer (page numbers) are
+  preserved — only the about:blank URL is removed.
+- **Print and PDF margins now match**: Both print and PDF export use the same default browser
+  margins for consistent output.
+
 ## [1.3.0] - 2025-06-15
 
 ### Added
@@ -15,9 +29,6 @@ All notable changes to MarkUp Markdown Editor will be documented in this file.
   anchor link scrollIntoView script presence (147 total).
 
 ### Fixed
-- **Print footer removed**: Added `@page { margin: 0 }` CSS rule in print media query, which
-  eliminates the browser's header/footer area entirely (removing the `about:blank` footer).
-  Body padding of 15mm preserves content margins on paper.
 - **Print uses browser dialog with preview**: Print now uses `ShowPrintUI(Browser)` on the
   main `PreviewWebView`, which shows the Chromium print preview dialog with full WYSIWYG
   preview. `@media print` CSS rules automatically switch to light theme and hide the toolbar.

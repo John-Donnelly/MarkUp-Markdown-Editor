@@ -11,7 +11,7 @@ A modern, dark-mode Markdown editor and viewer for Windows, built with WinUI 3 a
 - **Full Markdown Support**: Headings, bold, italic, strikethrough, code blocks, tables, task lists, blockquotes, images, links, and more
 - **Formatting Toolbar**: Left-aligned quick-access toolbar buttons and keyboard shortcuts for all formatting operations
 - **Find & Replace**: Built-in find and replace with case-sensitive matching
-- **Print & Export**: Clean printing with no browser headers/footers — preview panel is never disrupted; print to PDF, export to HTML, and export to plain text with proper font colour management
+- **Print & Export**: Clean printing with document title header and page numbers — no about:blank in footers; print to PDF, export to HTML, and export to plain text with proper font colour management
 - **Font Customization**: Configurable editor font family and size
 - **Zoom Controls**: Zoom in/out on the editor
 - **View Modes**: Switch between split view, editor-only, and preview-only
