@@ -271,7 +271,7 @@ public class MarkdownParserTests
     public void ToHtml_NotEditable_NoWysiwygToolbar()
     {
         var result = MarkdownParser.ToHtml("Hello", darkMode: true, editable: false);
-        Assert.IsFalse(result.Contains("wysiwyg-toolbar"));
+        Assert.IsFalse(result.Contains("id=\"wysiwyg-toolbar\""));
     }
 
     [TestMethod]
@@ -288,5 +288,22 @@ public class MarkdownParserTests
         var result = MarkdownParser.ToHtml("Hello", darkMode: true, editable: false);
         Assert.IsTrue(result.Contains("openLink"));
         Assert.IsTrue(result.Contains("e.ctrlKey"));
+    }
+
+    [TestMethod]
+    public void ToHtml_ContainsPrintMediaRules()
+    {
+        var result = MarkdownParser.ToHtml("Hello", darkMode: true, editable: true);
+        Assert.IsTrue(result.Contains("@media print"));
+        Assert.IsTrue(result.Contains("background-color: #fff"));
+        Assert.IsTrue(result.Contains("color: #000"));
+    }
+
+    [TestMethod]
+    public void ToHtml_PrintMediaRules_HideToolbar()
+    {
+        var result = MarkdownParser.ToHtml("Hello", darkMode: true, editable: true);
+        Assert.IsTrue(result.Contains("#wysiwyg-toolbar"));
+        Assert.IsTrue(result.Contains("display: none"));
     }
 }

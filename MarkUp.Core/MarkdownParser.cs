@@ -563,6 +563,30 @@ public static partial class MarkdownParser
   del {{ opacity: 0.6; }}
   strong {{ font-weight: 700; }}
   {toolbarCss}
+  @media print {{
+    #wysiwyg-toolbar {{ display: none !important; }}
+    body {{ background-color: #fff !important; color: #000 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }}
+    #editor-body {{ padding: 0 !important; max-width: 100% !important; }}
+    h1, h2, h3, h4, h5, h6 {{ color: #000 !important; }}
+    h1 {{ border-bottom-color: #ccc !important; }}
+    h2 {{ border-bottom-color: #ccc !important; }}
+    p, li, td, th {{ color: #000 !important; }}
+    a {{ color: #0066cc !important; text-decoration: underline !important; }}
+    a::after {{ display: none !important; }}
+    code {{ background: #f0f0f0 !important; color: #000 !important; }}
+    pre {{ background: #f5f5f5 !important; color: #000 !important; border-color: #ddd !important; }}
+    pre code {{ color: #000 !important; }}
+    blockquote {{ border-left-color: #999 !important; background: #f9f9f9 !important; color: #333 !important; }}
+    th {{ background: #eee !important; color: #000 !important; }}
+    td {{ background: #fff !important; color: #000 !important; border-color: #999 !important; }}
+    th {{ border-color: #999 !important; }}
+    hr {{ border-top-color: #ccc !important; }}
+    del {{ color: #666 !important; }}
+    strong {{ color: #000 !important; }}
+    em {{ color: #000 !important; }}
+    pre, blockquote, table, img {{ page-break-inside: avoid; }}
+    h1, h2, h3 {{ page-break-after: avoid; }}
+  }}
 </style>
 </head>
 <body>
