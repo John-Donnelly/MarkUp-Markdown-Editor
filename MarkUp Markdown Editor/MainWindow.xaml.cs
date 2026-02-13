@@ -15,6 +15,7 @@ using Windows.ApplicationModel.DataTransfer;
 using Windows.Graphics;
 using Windows.Storage;
 using Windows.Storage.Pickers;
+using Windows.Storage.Streams;
 using WinRT.Interop;
 
 namespace MarkUp_Markdown_Editor;
@@ -31,6 +32,8 @@ public sealed partial class MainWindow : Window
     private bool _isSplitterDragging;
     private double _splitterStartX;
     private double _editorStartWidth;
+    private string _currentPreviewHtml = string.Empty;
+    private string _currentPrintHtml = string.Empty;
 
     // View modes
     private enum ViewMode { Split, EditorOnly, PreviewOnly }
@@ -99,6 +102,15 @@ public sealed partial class MainWindow : Window
             PreviewWebView.CoreWebView2.Settings.AreDevToolsEnabled = false;
             PreviewWebView.CoreWebView2.Settings.IsZoomControlEnabled = false;
             PreviewWebView.CoreWebView2.WebMessageReceived += CoreWebView2_WebMessageReceived;
+
+            // Serve preview HTML from a virtual host so the page URL isn't about:blank
+            PreviewWebView.CoreWebView2.AddWebResourceRequestedFilter("https://markup.preview/*", CoreWebView2WebResourceContext.All);
+            PreviewWebView.CoreWebView2.WebResourceRequested += (s, args) =>
+            {
+                var stream = new MemoryStream(System.Text.Encoding.UTF8.GetBytes(_currentPreviewHtml));
+                args.Response = s.Environment.CreateWebResourceResponse(stream.AsRandomAccessStream(), 200, "OK", "Content-Type: text/html; charset=utf-8");
+            };
+
             UpdatePreview();
         }
         catch
@@ -112,6 +124,14 @@ public sealed partial class MainWindow : Window
             _printWebViewReady = true;
             PrintWebView.CoreWebView2.Settings.AreDefaultContextMenusEnabled = false;
             PrintWebView.CoreWebView2.Settings.AreDevToolsEnabled = false;
+
+            // Serve print HTML from a virtual host so PDF footer isn't about:blank
+            PrintWebView.CoreWebView2.AddWebResourceRequestedFilter("https://markup.print/*", CoreWebView2WebResourceContext.All);
+            PrintWebView.CoreWebView2.WebResourceRequested += (s, args) =>
+            {
+                var stream = new MemoryStream(System.Text.Encoding.UTF8.GetBytes(_currentPrintHtml));
+                args.Response = s.Environment.CreateWebResourceResponse(stream.AsRandomAccessStream(), 200, "OK", "Content-Type: text/html; charset=utf-8");
+            };
         }
         catch
         {
@@ -228,8 +248,8 @@ public sealed partial class MainWindow : Window
 
         try
         {
-            var html = MarkdownParser.ToHtml(_document.Content, darkMode: true, editable: true, documentTitle: _document.DisplayName);
-            PreviewWebView.NavigateToString(html);
+            _currentPreviewHtml = MarkdownParser.ToHtml(_document.Content, darkMode: true, editable: true, documentTitle: _document.DisplayName);
+            PreviewWebView.CoreWebView2.Navigate("https://markup.preview/" + Uri.EscapeDataString(_document.DisplayName));
         }
         catch
         {
@@ -468,16 +488,16 @@ public sealed partial class MainWindow : Window
 
         try
         {
-            var printHtml = MarkdownParser.ToHtmlForPrint(_document.Content, _document.DisplayName);
+            _currentPrintHtml = MarkdownParser.ToHtmlForPrint(_document.Content, _document.DisplayName);
 
-            // Navigate and wait for the page to fully load before exporting
+            // Navigate via virtual host and wait for the page to fully load before exporting
             var navigationTcs = new TaskCompletionSource<bool>();
             void OnNavigationCompleted(WebView2 s, Microsoft.Web.WebView2.Core.CoreWebView2NavigationCompletedEventArgs a)
             {
                 navigationTcs.TrySetResult(a.IsSuccess);
             }
             PrintWebView.NavigationCompleted += OnNavigationCompleted;
-            PrintWebView.NavigateToString(printHtml);
+            PrintWebView.CoreWebView2.Navigate("https://markup.print/" + Uri.EscapeDataString(_document.DisplayName));
             var navSuccess = await navigationTcs.Task;
             PrintWebView.NavigationCompleted -= OnNavigationCompleted;
 
@@ -490,6 +510,7 @@ public sealed partial class MainWindow : Window
             var printSettings = PrintWebView.CoreWebView2.Environment.CreatePrintSettings();
             printSettings.ShouldPrintBackgrounds = true;
             printSettings.HeaderTitle = _document.DisplayName;
+            printSettings.FooterUri = " ";
             printSettings.ShouldPrintHeaderAndFooter = true;
 
             var success = await PrintWebView.CoreWebView2.PrintToPdfAsync(file.Path, printSettings);
