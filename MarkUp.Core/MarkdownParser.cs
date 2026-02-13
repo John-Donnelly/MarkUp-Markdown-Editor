@@ -584,9 +584,8 @@ public static partial class MarkdownParser
   strong {{ font-weight: 700; }}
   {toolbarCss}
   @media print {{
-    @page {{ margin: 0; }}
     #wysiwyg-toolbar {{ display: none !important; }}
-    body {{ background-color: #fff !important; color: #000 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; padding: 15mm !important; }}
+    body {{ background-color: #fff !important; color: #000 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }}
     #editor-body {{ padding: 0 !important; max-width: 100% !important; }}
     h1, h2, h3, h4, h5, h6 {{ color: #000 !important; }}
     h1 {{ border-bottom-color: #ccc !important; }}
