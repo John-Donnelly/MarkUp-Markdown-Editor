@@ -62,7 +62,7 @@ public sealed partial class MainWindow : Window
             var windowId = Win32Interop.GetWindowIdFromWindow(hWnd);
             var appWindow = AppWindow.GetFromWindowId(windowId);
 
-            var iconPath = Path.Combine(AppContext.BaseDirectory, "Assets", "MarkUp-icon.png");
+            var iconPath = Path.Combine(AppContext.BaseDirectory, "Assets", "MarkUp-icon.ico");
             if (File.Exists(iconPath))
             {
                 appWindow.SetIcon(iconPath);

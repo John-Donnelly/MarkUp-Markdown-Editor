@@ -307,7 +307,7 @@
         </Grid>
 
         <!-- Hidden WebView2 for background print/PDF operations -->
-        <WebView2 x:Name="PrintWebView" Visibility="Collapsed" Width="0" Height="0" />
+        <WebView2 x:Name="PrintWebView" Grid.Row="2" Opacity="0" IsHitTestVisible="False" Canvas.ZIndex="-1" />
 
         <!-- Status Bar -->
         <Border x:Name="StatusBar" Grid.Row="3" 
