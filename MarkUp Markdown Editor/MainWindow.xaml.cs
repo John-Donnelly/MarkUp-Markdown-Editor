@@ -1122,7 +1122,7 @@ code block
 
         aboutPanel.Children.Add(new TextBlock
         {
-            Text = "© 2025 John Donnelly. All rights reserved.",
+            Text = "© 2025 JAD Apps. All rights reserved.",
             FontSize = 12,
             Foreground = new Microsoft.UI.Xaml.Media.SolidColorBrush(
                 Microsoft.UI.Colors.Gray)
@@ -1172,6 +1172,17 @@ code block
     {
         _isSplitterDragging = false;
         (sender as UIElement)?.ReleasePointerCapture(e.Pointer);
+
+        // Convert pixel widths to proportional Star values so columns
+        // maintain their ratio when the window is resized.
+        var editorW = EditorColumn.ActualWidth;
+        var previewW = PreviewColumn.ActualWidth;
+        if (editorW > 0 && previewW > 0)
+        {
+            EditorColumn.Width = new GridLength(editorW, GridUnitType.Star);
+            PreviewColumn.Width = new GridLength(previewW, GridUnitType.Star);
+        }
+
         e.Handled = true;
     }
 

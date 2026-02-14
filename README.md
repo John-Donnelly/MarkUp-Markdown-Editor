@@ -61,4 +61,4 @@ Requires:
 
 ## License
 
-© 2025 John Donnelly. All rights reserved.
+© 2025 JAD Apps. All rights reserved.
