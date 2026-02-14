@@ -1122,7 +1122,7 @@ code block
 
         aboutPanel.Children.Add(new TextBlock
         {
-            Text = "© 2025 JAD Apps. All rights reserved.",
+            Text = "© 2026 JAD Apps. All rights reserved.",
             FontSize = 12,
             Foreground = new Microsoft.UI.Xaml.Media.SolidColorBrush(
                 Microsoft.UI.Colors.Gray)

@@ -9,11 +9,11 @@
   IgnorableNamespaces="uap rescap systemai">
 
   <Identity
-    Name="093e4ec2-0866-45b3-809a-02f3cd82fc3a"
-    Publisher="CN=John_"
+    Name="JADApps.MarkUpMarkdownEditor"
+    Publisher="CN=2B43AD1A-273D-402E-A9A5-FF23C52C75B9"
     Version="1.3.1.0" />
 
-  <mp:PhoneIdentity PhoneProductId="093e4ec2-0866-45b3-809a-02f3cd82fc3a" PhonePublisherId="00000000-0000-0000-0000-000000000000"/>
+  <mp:PhoneIdentity PhoneProductId="JADApps.MarkUpMarkdownEditor" PhonePublisherId="00000000-0000-0000-0000-000000000000"/>
 
   <Properties>
     <DisplayName>MarkUp Markdown Editor</DisplayName>
