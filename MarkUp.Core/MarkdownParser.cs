@@ -495,8 +495,6 @@ public static partial class MarkdownParser
   }}
   #editor-body {{
     padding: 24px 32px;
-    max-width: 900px;
-    margin: 0 auto;
     min-height: calc(100vh - 40px);
   }}
   h1, h2, h3, h4, h5, h6 {{
