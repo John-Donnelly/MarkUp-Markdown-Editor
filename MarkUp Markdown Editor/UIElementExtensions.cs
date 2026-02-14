@@ -1,29 +1,16 @@
 using Microsoft.UI.Input;
 using Microsoft.UI.Xaml;
-using System;
-using System.Runtime.InteropServices;
 
 namespace MarkUp_Markdown_Editor;
 
 internal static class UIElementExtensions
 {
-    [DllImport("user32.dll")]
-    private static extern IntPtr LoadCursor(IntPtr hInstance, int lpCursorName);
-
-    [DllImport("user32.dll")]
-    private static extern IntPtr SetCursor(IntPtr hCursor);
-
-    private const int IDC_SIZEWE = 32644;
-    private const int IDC_ARROW = 32512;
-
     public static void ChangeCursor(this UIElement element, InputSystemCursorShape cursorShape)
     {
-        int cursorId = cursorShape switch
-        {
-            InputSystemCursorShape.SizeWestEast => IDC_SIZEWE,
-            _ => IDC_ARROW
-        };
-        var cursor = LoadCursor(IntPtr.Zero, cursorId);
-        SetCursor(cursor);
+        // ProtectedCursor is a protected property on UIElement.
+        // Use reflection to set it so the cursor persists while over the element.
+        var prop = typeof(UIElement).GetProperty("ProtectedCursor",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+        prop?.SetValue(element, InputSystemCursor.Create(cursorShape));
     }
 }

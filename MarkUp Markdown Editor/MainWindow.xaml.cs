@@ -1185,7 +1185,7 @@ code block
 
     private void Splitter_PointerExited(object sender, PointerRoutedEventArgs e)
     {
-        if (sender is UIElement element)
+        if (!_isSplitterDragging && sender is UIElement element)
         {
             element.ChangeCursor(InputSystemCursorShape.Arrow);
         }
