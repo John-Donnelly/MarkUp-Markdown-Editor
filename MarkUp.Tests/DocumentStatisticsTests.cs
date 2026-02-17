@@ -82,4 +82,32 @@ public class DocumentStatisticsTests
         Assert.IsTrue(result.Contains("Characters: 11"));
         Assert.IsTrue(result.Contains("Lines: 1"));
     }
+
+    [TestMethod]
+    public void Compute_CarriageReturnOnly_CorrectLineCount()
+    {
+        var stats = DocumentStatistics.Compute("Line1\rLine2\rLine3");
+        Assert.AreEqual(3, stats.Lines);
+    }
+
+    [TestMethod]
+    public void Compute_CrLf_CorrectLineCount()
+    {
+        var stats = DocumentStatistics.Compute("Line1\r\nLine2\r\nLine3");
+        Assert.AreEqual(3, stats.Lines);
+    }
+
+    [TestMethod]
+    public void Compute_CarriageReturnOnly_CorrectParagraphCount()
+    {
+        var stats = DocumentStatistics.Compute("Paragraph one.\r\rParagraph two.\r\rParagraph three.");
+        Assert.AreEqual(3, stats.Paragraphs);
+    }
+
+    [TestMethod]
+    public void Compute_CrLf_CorrectParagraphCount()
+    {
+        var stats = DocumentStatistics.Compute("Paragraph one.\r\n\r\nParagraph two.\r\n\r\nParagraph three.");
+        Assert.AreEqual(3, stats.Paragraphs);
+    }
 }

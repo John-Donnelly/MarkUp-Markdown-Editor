@@ -83,10 +83,18 @@ public sealed class DocumentStatistics
             return 0;
 
         int count = 1;
-        foreach (var c in text)
+        for (int i = 0; i < text.Length; i++)
         {
-            if (c == '\n')
+            if (text[i] == '\r')
+            {
                 count++;
+                if (i + 1 < text.Length && text[i + 1] == '\n')
+                    i++;
+            }
+            else if (text[i] == '\n')
+            {
+                count++;
+            }
         }
         return count;
     }
@@ -96,7 +104,7 @@ public sealed class DocumentStatistics
         if (string.IsNullOrWhiteSpace(text))
             return 0;
 
-        var lines = text.Split('\n');
+        var lines = text.Split(new[] { "\r\n", "\r", "\n" }, StringSplitOptions.None);
         int count = 0;
         bool inParagraph = false;
         foreach (var line in lines)
