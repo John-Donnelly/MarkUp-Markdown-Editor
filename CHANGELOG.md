@@ -2,6 +2,16 @@
 
 All notable changes to MarkUp Markdown Editor will be documented in this file.
 
+## [1.3.2] - 2025-06-16
+
+### Fixed
+- **Line count not updating when opening a file**: `CountLines` only counted `\n` characters
+  but WinUI 3's `TextBox` normalises line endings to `\r`. When the deferred `TextChanged`
+  event fired after opening a file, the line count reverted to 1. Updated `CountLines` to
+  recognise `\r`, `\n`, and `\r\n` as line separators. Also fixed `CountParagraphs` which
+  had the same single-separator issue.
+- **4 new unit tests** covering `\r`-only and `\r\n` line and paragraph counting (151 total).
+
 ## [1.3.1] - 2025-06-15
 
 ### Fixed

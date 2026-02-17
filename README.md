@@ -50,7 +50,7 @@ A modern, dark-mode Markdown editor and viewer for Windows, built with WinUI 3 a
 
 - **MarkUp Markdown Editor** — WinUI 3 application (main project)
 - **MarkUp.Core** — Class library with markdown parsing, formatting, document model, HTML-to-Markdown conversion, and export logic
-- **MarkUp.Tests** — MSTest unit tests for the core library (147 tests)
+- **MarkUp.Tests** — MSTest unit tests for the core library (151 tests)
 
 ## Building
 
