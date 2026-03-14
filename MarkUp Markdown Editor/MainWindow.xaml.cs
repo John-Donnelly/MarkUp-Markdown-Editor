@@ -10,6 +10,7 @@ using System;
 using System.IO;
 using System.Reflection;
 using System.Runtime.InteropServices;
+using System.Text.Json;
 using System.Threading.Tasks;
 using Windows.ApplicationModel.DataTransfer;
 using Windows.Graphics;
@@ -31,13 +32,19 @@ public sealed partial class MainWindow : Window
     private int _zoomPercent = 100;
     private bool _isSplitterDragging;
     private double _splitterStartX;
-    private double _editorStartWidth;
+    private double _editorStartWidth;                                                                     
     private string _currentPreviewHtml = string.Empty;
     private string _currentPrintHtml = string.Empty;
+    private bool _previewInitialized;
+    private bool _isUpdatingPreview;
 
     // View modes
     private enum ViewMode { Split, EditorOnly, PreviewOnly }
     private ViewMode _viewMode = ViewMode.Split;
+
+    // Tracks which editing panel has keyboard focus for routing edit commands
+    private enum FocusedPanel { None, Editor, Preview }
+    private FocusedPanel _focusedPanel = FocusedPanel.None;
 
     public MainWindow()
     {
@@ -55,6 +62,7 @@ public sealed partial class MainWindow : Window
 
         // Initialize WebView2
         InitializeWebViewAsync();
+        RefreshAutomationState();
     }
 
     private void SetWindowIcon()
@@ -194,13 +202,18 @@ public sealed partial class MainWindow : Window
 
             var markdown = HtmlToMarkdownConverter.Convert(htmlContent);
 
-            // Sync back to editor
+            // Stop the debounce timer to prevent a feedback loop:
+            // preview edit -> markdown update -> timer fires -> UpdatePreview() -> overwrites preview
+            _previewTimer.Stop();
+
             _suppressPreviewSync = true;
             _suppressTextChanged = true;
             EditorTextBox.Text = markdown;
             _suppressTextChanged = false;
             _document.Content = markdown;
+            // Clear sync suppression synchronously — timer is already stopped so no race condition
             _suppressPreviewSync = false;
+            SetAutomationSyncSource("PreviewToEditor");
             UpdateTitle();
             UpdateStatusBar();
         }
@@ -217,11 +230,38 @@ public sealed partial class MainWindow : Window
 
     #region Editor Events
 
+    private void EditorTextBox_GotFocus(object sender, RoutedEventArgs e)
+    {
+        _focusedPanel = FocusedPanel.Editor;
+        RefreshAutomationState();
+    }
+
+    private void EditorTextBox_LostFocus(object sender, RoutedEventArgs e)
+    {
+        if (_focusedPanel == FocusedPanel.Editor)
+            _focusedPanel = FocusedPanel.None;
+        RefreshAutomationState();
+    }
+
+    private void PreviewWebView_GotFocus(object sender, RoutedEventArgs e)
+    {
+        _focusedPanel = FocusedPanel.Preview;
+        RefreshAutomationState();
+    }
+
+    private void PreviewWebView_LostFocus(object sender, RoutedEventArgs e)
+    {
+        if (_focusedPanel == FocusedPanel.Preview)
+            _focusedPanel = FocusedPanel.None;
+        RefreshAutomationState();
+    }
+
     private void EditorTextBox_TextChanged(object sender, TextChangedEventArgs e)
     {
         if (_suppressTextChanged) return;
 
         _document.Content = EditorTextBox.Text;
+        SetAutomationSyncSource("EditorToPreview");
         UpdateTitle();
         UpdateStatusBar();
 
@@ -241,19 +281,50 @@ public sealed partial class MainWindow : Window
         UpdatePreview();
     }
 
-    private void UpdatePreview()
+    private async void UpdatePreview()
     {
         if (!_webViewReady) return;
         if (_suppressPreviewSync) return;
+        if (_isUpdatingPreview) return;
 
+        _isUpdatingPreview = true;
         try
         {
-            _currentPreviewHtml = MarkdownParser.ToHtml(_document.Content, darkMode: true, editable: true, documentTitle: _document.DisplayName);
-            PreviewWebView.CoreWebView2.Navigate("https://markup.preview/" + Uri.EscapeDataString(_document.DisplayName));
+            if (!_previewInitialized)
+            {
+                // Initial preview content should not trigger a full browser-style navigation during
+                // normal typing. The navigation path was causing WinAppDriver to lose its attached
+                // top-level window/session on the first debounced preview render.
+                _currentPreviewHtml = MarkdownParser.ToHtml(_document.Content, darkMode: true, editable: true, documentTitle: _document.DisplayName);
+
+                var tcs = new TaskCompletionSource<bool>();
+                void OnNavCompleted(WebView2 s, CoreWebView2NavigationCompletedEventArgs a)
+                {
+                    tcs.TrySetResult(a.IsSuccess);
+                }
+                PreviewWebView.NavigationCompleted += OnNavCompleted;
+                PreviewWebView.NavigateToString(_currentPreviewHtml);
+                await tcs.Task;
+                PreviewWebView.NavigationCompleted -= OnNavCompleted;
+                _previewInitialized = true;
+            }
+            else
+            {
+                // Incremental update: replace only body content without a page reload.
+                // Preserves JS state, scroll position, and WebView2 focus.
+                var bodyHtml = MarkdownParser.ToHtmlFragment(_document.Content);
+                var escapedHtml = JsonSerializer.Serialize(bodyHtml);
+                await PreviewWebView.CoreWebView2.ExecuteScriptAsync($"updateContent({escapedHtml});");
+            }
         }
         catch
         {
             // Swallow rendering errors
+        }
+        finally
+        {
+            RefreshAutomationState();
+            _isUpdatingPreview = false;
         }
     }
 
@@ -261,6 +332,7 @@ public sealed partial class MainWindow : Window
     {
         var stats = _document.GetStatistics();
         StatusBarStats.Text = stats.ToString();
+        RefreshAutomationState();
     }
 
     private void UpdateCursorPosition()
@@ -288,7 +360,25 @@ public sealed partial class MainWindow : Window
             }
         }
         StatusBarPosition.Text = $"Ln {line}, Col {col}";
+        RefreshAutomationState();
     }
+
+    private void RefreshAutomationState()
+    {
+        AutomationDocumentContent.Text = TrimAutomationText(_document.Content);
+        AutomationPreviewHtml.Text = TrimAutomationText(MarkdownParser.ToHtmlFragment(_document.Content));
+        AutomationFocusedPanel.Text = _focusedPanel.ToString();
+        AutomationViewMode.Text = _viewMode.ToString();
+    }
+
+    private void SetAutomationSyncSource(string source)
+    {
+        AutomationLastSyncSource.Text = source;
+        RefreshAutomationState();
+    }
+
+    private static string TrimAutomationText(string text)
+        => text.Length <= 4096 ? text : text[..4096];
 
     #endregion
 
@@ -313,6 +403,7 @@ public sealed partial class MainWindow : Window
         _suppressTextChanged = true;
         EditorTextBox.Text = string.Empty;
         _suppressTextChanged = false;
+        _previewInitialized = false;
         UpdateTitle();
         UpdateStatusBar();
         UpdatePreview();
@@ -353,6 +444,7 @@ public sealed partial class MainWindow : Window
             _suppressTextChanged = false;
             _document.Content = content;
             _document.MarkSaved();
+            _previewInitialized = false;
             UpdateTitle();
             UpdateStatusBar();
             UpdatePreview();
@@ -536,9 +628,11 @@ public sealed partial class MainWindow : Window
 
         try
         {
-            // The preview HTML already has the document title in its <title> tag,
-            // and @media print CSS rules switch to light theme and hide the toolbar.
-            PreviewWebView.CoreWebView2.ShowPrintUI(CoreWebView2PrintDialogKind.Browser);
+            // System dialog opens the native Windows print dialog (separate OS window).
+            // Browser kind hosts the print UI inside the WebView2 renderer, which triggers
+            // an internal back-navigation on dismiss that makes the WebView2 UIA provider
+            // temporarily unavailable — breaking automated UI tests.
+            PreviewWebView.CoreWebView2.ShowPrintUI(CoreWebView2PrintDialogKind.System);
         }
         catch (Exception ex)
         {
@@ -557,16 +651,28 @@ public sealed partial class MainWindow : Window
 
     private void MenuUndo_Click(object sender, RoutedEventArgs e)
     {
-        EditorTextBox.Undo();
+        if (_focusedPanel == FocusedPanel.Preview)
+            _ = PreviewWebView.CoreWebView2?.ExecuteScriptAsync("document.execCommand('undo')");
+        else
+            EditorTextBox.Undo();
     }
 
     private void MenuRedo_Click(object sender, RoutedEventArgs e)
     {
-        EditorTextBox.Redo();
+        if (_focusedPanel == FocusedPanel.Preview)
+            _ = PreviewWebView.CoreWebView2?.ExecuteScriptAsync("document.execCommand('redo')");
+        else
+            EditorTextBox.Redo();
     }
 
     private void MenuCut_Click(object sender, RoutedEventArgs e)
     {
+        if (_focusedPanel == FocusedPanel.Preview)
+        {
+            _ = PreviewWebView.CoreWebView2?.ExecuteScriptAsync("document.execCommand('cut')");
+            return;
+        }
+
         if (EditorTextBox.SelectionLength > 0)
         {
             var dp = new DataPackage();
@@ -582,6 +688,12 @@ public sealed partial class MainWindow : Window
 
     private void MenuCopy_Click(object sender, RoutedEventArgs e)
     {
+        if (_focusedPanel == FocusedPanel.Preview)
+        {
+            _ = PreviewWebView.CoreWebView2?.ExecuteScriptAsync("document.execCommand('copy')");
+            return;
+        }
+
         if (EditorTextBox.SelectionLength > 0)
         {
             var dp = new DataPackage();
@@ -592,6 +704,14 @@ public sealed partial class MainWindow : Window
 
     private async void MenuPaste_Click(object sender, RoutedEventArgs e)
     {
+        if (_focusedPanel == FocusedPanel.Preview)
+        {
+            // Use Clipboard API first; fall back to execCommand for older runtimes
+            _ = PreviewWebView.CoreWebView2?.ExecuteScriptAsync(
+                "navigator.clipboard.readText().then(function(t){document.execCommand('insertText',false,t)}).catch(function(){document.execCommand('paste')})");
+            return;
+        }
+
         var content = Clipboard.GetContent();
         if (content.Contains(StandardDataFormats.Text))
         {
@@ -613,7 +733,10 @@ public sealed partial class MainWindow : Window
 
     private void MenuSelectAll_Click(object sender, RoutedEventArgs e)
     {
-        EditorTextBox.SelectAll();
+        if (_focusedPanel == FocusedPanel.Preview)
+            _ = PreviewWebView.CoreWebView2?.ExecuteScriptAsync("document.execCommand('selectAll')");
+        else
+            EditorTextBox.SelectAll();
     }
 
     private void MenuFind_Click(object sender, RoutedEventArgs e)
@@ -881,6 +1004,8 @@ public sealed partial class MainWindow : Window
                 PreviewPanel.Visibility = Visibility.Visible;
                 break;
         }
+
+        RefreshAutomationState();
     }
 
     private void MenuViewEditor_Click(object sender, RoutedEventArgs e) => SetViewMode(ViewMode.EditorOnly);
@@ -923,6 +1048,41 @@ public sealed partial class MainWindow : Window
         StatusBar.Visibility = StatusBar.Visibility == Visibility.Visible
             ? Visibility.Collapsed
             : Visibility.Visible;
+        RefreshAutomationState();
+    }
+
+    private void AutomationFocusEditorButton_Click(object sender, RoutedEventArgs e)
+    {
+        EditorTextBox.Focus(FocusState.Programmatic);
+        _focusedPanel = FocusedPanel.Editor;
+        RefreshAutomationState();
+    }
+
+    private void AutomationFocusPreviewButton_Click(object sender, RoutedEventArgs e)
+    {
+        PreviewWebView.Focus(FocusState.Programmatic);
+        _focusedPanel = FocusedPanel.Preview;
+        RefreshAutomationState();
+    }
+
+    private async void AutomationPreviewInsertTextButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (!_webViewReady) return;
+
+        _focusedPanel = FocusedPanel.Preview;
+        await PreviewWebView.CoreWebView2.ExecuteScriptAsync(
+            "var body=document.getElementById('editor-body'); if(body){ body.focus(); body.innerHTML='<p>preview bridge text</p>'; if(window.notifyChange){ notifyChange(); }}");
+        RefreshAutomationState();
+    }
+
+    private async void AutomationPreviewBoldButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (!_webViewReady) return;
+
+        _focusedPanel = FocusedPanel.Preview;
+        await PreviewWebView.CoreWebView2.ExecuteScriptAsync(
+            "var body=document.getElementById('editor-body'); if(body){ body.focus(); body.innerHTML='<p><strong>preview bold text</strong></p>'; if(window.notifyChange){ notifyChange(); }}");
+        RefreshAutomationState();
     }
 
     #endregion
