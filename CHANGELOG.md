@@ -2,6 +2,100 @@
 
 All notable changes to MarkUp Markdown Editor will be documented in this file.
 
+## [1.4.0] - 2025-06-17
+
+### Added
+- **Find & Replace bar**: Inline toolbar that slides in below the menu bar with a Find text
+  box, Find Previous / Find Next buttons, Match Case checkbox, Replace text box, and
+  Replace / Replace All buttons. All controls carry `AutomationId` attributes for reliable
+  access from automated UI tests.
+- **Bidirectional preview editing**: The preview pane is now `contenteditable`. Changes are
+  debounced (400 ms), posted back to the host via `window.chrome.webview.postMessage`,
+  converted from HTML to Markdown through `HtmlToMarkdownConverter`, and synced to the
+  source editor in real time. A `_suppressNotify` flag and `updateContent()` JS function
+  prevent round-trip feedback loops.
+- **Focus-aware Edit menu routing**: A `FocusedPanel` enum (`None`, `Editor`, `Preview`)
+  tracks which pane currently holds keyboard focus via `GotFocus`/`LostFocus` handlers.
+  Undo, Redo, Cut, Copy, Paste, and Select All are all routed to the active panel — editor
+  operations use the `TextBox` API; preview operations use `document.execCommand` /
+  the Clipboard API inside the WebView2.
+- **Setext heading support** in `MarkdownParser`: underline-style headings (`===` for H1,
+  `---` for H2) are now recognised and rendered correctly alongside ATX-style headings.
+- **Automation bridge panel**: A hidden 10×10 px `Canvas` (`AutomationBridgePanel`)
+  positioned early in the XAML tree — before WebView2 — so WinAppDriver's UIA traversal
+  reaches it without entering the Chromium accessibility subtree. Contains:
+  - `AutomationFocusEditorButton` / `AutomationFocusPreviewButton` — 1×1 invisible buttons
+    that programmatically set panel focus for test setup.
+  - `AutomationPreviewInsertTextButton` / `AutomationPreviewBoldButton` — inject known
+    content into the preview's `contenteditable` body for bidirectional-editing tests.
+  - `AutomationDocumentContent`, `AutomationPreviewHtml`, `AutomationFocusedPanel`,
+    `AutomationViewMode`, `AutomationLastSyncSource` — read-only `TextBlock`s that
+    mirror live app state so tests can assert without querying internal fields.
+- **`MarkUp.UITests` project** added to the solution: WinAppDriver + Appium (OpenQA.Selenium
+  .Appium 6.x) automation test suite with 200+ tests covering startup, editor typing, all
+  menu operations, Find & Replace workflows, status bar statistics, zoom, view modes, the
+  splitter, and help dialogs. Supports both local WinAppDriver and remote execution against
+  a second machine (configurable via `UITEST_DRIVER_URL` and `UITEST_REMOTE_APP_PATH`
+  environment variables).
+- **Expanded unit test coverage** — `MarkUp.Tests` grows from 151 to 288+ tests:
+  - `MarkdownParserTests`: setext headings, heading slug/ID generation, inline code HTML
+    escaping, `+`-prefix unordered lists, nested ordered/unordered lists, task lists,
+    fenced code blocks, GFM table column alignment, blockquotes.
+  - `HtmlToMarkdownConverterTests`: `<span>` bold/italic/strikethrough styles, `<div>`
+    line wrapping, nested lists, task lists, table alignment separators, numeric decimal
+    and hex HTML entity decoding, links, images, edge cases (empty divs, multiple `<br>`).
+  - `MarkdownFormatterTests`: heading levels H3–H6, out-of-range level clamping,
+    strikethrough and inline-code toggle on/off, no-selection marker insertion,
+    `InsertHorizontalRule`, `InsertLink` (with and without selection), `InsertImage`.
+  - `MarkdownDocumentTests`: new-document state, dirty/clean window title, `DisplayName`
+    after reset, multi-change dirty tracking, `MarkSaved` cycle.
+  - `DocumentStatisticsTests`: single-line counting, trailing-newline edge case, tab
+    characters, `\r`/`\r\n`/`\n` mixed line endings, multi-word accuracy.
+  - `DocumentExporterTests`: dark/light mode HTML output, heading conversion, plain-text
+    marker stripping (bold, italic, bold-italic, code fences, image alt text, blank-line
+    collapsing), null input handling.
+- **`RoundTripTests` suite**: verifies Markdown → HTML → Markdown fidelity for headings,
+  bold, italic, lists, blockquotes, code blocks, and GFM tables.
+
+### Fixed
+- **Ctrl+A / Copy-Paste targeting wrong panel**: Before this release, `Ctrl+A` and Paste
+  always acted on the editor `TextBox` regardless of where the user had clicked. Focus is
+  now tracked per panel and shortcuts are dispatched accordingly.
+- **Inline code HTML escaping**: `<` and `>` inside backtick spans (e.g. `` `a < b` ``)
+  were emitted as raw angle brackets, breaking HTML rendering. They are now escaped to
+  `&lt;` and `&gt;` before output.
+- **Table column alignment ignored**: A regex word-boundary bug in `ThCellRegex` caused
+  `<th` to match the start of `<thead`, discarding any `style="text-align:center/right"`
+  attributes and always producing `---` separators. The pattern now uses `\b` correctly
+  so `:---:` and `---:` alignment separators are emitted as expected.
+- **Incremental preview sync flicker**: Every keystroke triggered `NavigateToString`,
+  resetting scroll position and causing a white flash. Subsequent updates now call
+  `updateContent(escapedHtml)` via `ExecuteScriptAsync`, which replaces only the body
+  `innerHTML` without a page reload.
+- **Print dialog corrupting the UIA session**: Using `CoreWebView2PrintDialogKind.Browser`
+  hosted the print UI inside the WebView2 renderer; dismissing the dialog triggered an
+  internal back-navigation that put the WebView2 UIA provider into an unrecoverable state,
+  breaking all subsequent automated tests. Switched to `CoreWebView2PrintDialogKind.System`
+  which opens the native Windows print dialog in a separate OS window.
+- **Nested list HTML→Markdown conversion**: `HtmlToMarkdownConverter` previously processed
+  outer `<ul>`/`<ol>` first, causing inner list items to be emitted without indentation.
+  Lists are now expanded innermost-first (inside-out) so child items are correctly indented
+  by three spaces relative to their parent.
+- **`<div>` wrapper conversion**: `contenteditable` editors wrap each line in a `<div>`;
+  the new `ConvertDivs()` method maps `<div><br></div>` to blank lines and
+  `<div>content</div>` to text lines, preserving paragraph structure when pasting from or
+  syncing the preview.
+- **`<span>` inline formatting conversion**: Inline span styles emitted by browsers
+  (`font-weight:700`, `font-style:italic`, `text-decoration:line-through`) are now
+  converted to `**bold**`, `*italic*`, and `~~strikethrough~~` respectively. Underline
+  (`text-decoration:underline`) has no Markdown equivalent; the tag is stripped and its
+  text content is preserved.
+- **Strikethrough tag variants**: `<del>`, `<s>`, and `<strike>` all now convert to
+  `~~text~~`; previously only `<del>` was handled.
+- **Numeric HTML entity decoding**: `HtmlToMarkdownConverter` now decodes numeric decimal
+  entities (`&#160;`) and numeric hex entities (`&#xA0;`) in addition to the named
+  entities that were already supported.
+
 ## [1.3.2] - 2025-06-16
 
 ### Fixed
@@ -11,6 +105,7 @@ All notable changes to MarkUp Markdown Editor will be documented in this file.
   recognise `\r`, `\n`, and `\r\n` as line separators. Also fixed `CountParagraphs` which
   had the same single-separator issue.
 - **4 new unit tests** covering `\r`-only and `\r\n` line and paragraph counting (151 total).
+
 
 ## [1.3.1] - 2025-06-15
 
