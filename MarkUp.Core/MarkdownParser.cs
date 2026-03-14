@@ -194,6 +194,28 @@ public static partial class MarkdownParser
                 continue;
             }
 
+            // Setext headings: heading text followed by a line of === (H1) or --- (H2)
+            if (i + 1 < lines.Length)
+            {
+                var underline = lines[i + 1];
+                if (underline.Length >= 1 && underline.All(c => c == '='))
+                {
+                    var headingText = ProcessInline(line.Trim());
+                    var id = GenerateSlug(line.Trim());
+                    sb.AppendLine($"<h1 id=\"{id}\">{headingText}</h1>");
+                    i += 2;
+                    continue;
+                }
+                if (underline.Length >= 1 && underline.All(c => c == '-'))
+                {
+                    var headingText = ProcessInline(line.Trim());
+                    var id = GenerateSlug(line.Trim());
+                    sb.AppendLine($"<h2 id=\"{id}\">{headingText}</h2>");
+                    i += 2;
+                    continue;
+                }
+            }
+
             // Paragraph (default)
             {
                 var paraLines = new List<string>();
@@ -220,8 +242,8 @@ public static partial class MarkdownParser
     /// </summary>
     internal static string ProcessInline(string text)
     {
-        // Inline code (must come first to protect content)
-        text = InlineCodeRegex().Replace(text, "<code>$1</code>");
+        // Inline code (must come first to protect content; HTML-escape the captured text)
+        text = InlineCodeRegex().Replace(text, m => $"<code>{EscapeHtml(m.Groups[1].Value)}</code>");
 
         // Images
         text = ImageRegex().Replace(text, "<img src=\"$2\" alt=\"$1\" />");
@@ -400,6 +422,27 @@ public static partial class MarkdownParser
 
         var editScript = editable ? @"
 <script>
+  var _suppressNotify = false;
+  var debounceTimer;
+
+  // Called by C# host to update content without triggering a round-trip sync
+  function updateContent(html) {
+    _suppressNotify = true;
+    var body = document.getElementById('editor-body');
+    if (body) { body.innerHTML = html; }
+    // Re-enable notifications after the DOM settles
+    setTimeout(function() { _suppressNotify = false; }, 50);
+  }
+
+  function notifyChange() {
+    if (_suppressNotify) return;
+    clearTimeout(debounceTimer);
+    debounceTimer = setTimeout(function() {
+      var content = document.getElementById('editor-body').innerHTML;
+      window.chrome.webview.postMessage(JSON.stringify({ type: 'contentChanged', html: content }));
+    }, 400);
+  }
+
   function fmt(cmd, val) { document.execCommand(cmd, false, val || null); notifyChange(); }
   function fmtBlock(tag) {
     document.execCommand('formatBlock', false, '<' + tag + '>');
@@ -420,14 +463,6 @@ public static partial class MarkdownParser
   }
   function insertHR() {
     fmt('insertHorizontalRule');
-  }
-  var debounceTimer;
-  function notifyChange() {
-    clearTimeout(debounceTimer);
-    debounceTimer = setTimeout(function() {
-      var content = document.getElementById('editor-body').innerHTML;
-      window.chrome.webview.postMessage(JSON.stringify({ type: 'contentChanged', html: content }));
-    }, 400);
   }
   document.addEventListener('DOMContentLoaded', function() {
     var body = document.getElementById('editor-body');

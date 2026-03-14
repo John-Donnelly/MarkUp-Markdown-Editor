@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 using System.Text.RegularExpressions;
 
@@ -30,6 +31,7 @@ public static partial class HtmlToMarkdownConverter
         text = ConvertTables(text);
         text = ConvertHorizontalRules(text);
         text = ConvertParagraphs(text);
+        text = ConvertDivs(text); // Handle contentEditable div line wrappers
 
         // Process inline elements
         text = ConvertInlineElements(text);
@@ -132,47 +134,78 @@ public static partial class HtmlToMarkdownConverter
 
     private static string ConvertUnorderedLists(string html)
     {
-        // Match <ul> that are NOT task lists
-        return UlRegex().Replace(html, m =>
+        // Process innermost <ul> blocks first so nesting is handled inside-out
+        string prev;
+        do
         {
-            if (m.Value.Contains("task-list", StringComparison.OrdinalIgnoreCase))
-                return m.Value; // Already handled by ConvertTaskLists
-            var innerHtml = m.Groups[1].Value;
-            var sb = new StringBuilder();
-            sb.AppendLine();
-
-            var items = ListItemRegex().Matches(innerHtml);
-            foreach (Match item in items)
+            prev = html;
+            html = InnerUlRegex().Replace(html, m =>
             {
-                var text = StripHtmlTags(item.Groups[1].Value).Trim();
-                sb.AppendLine($"- {text}");
-            }
+                if (m.Value.Contains("task-list", StringComparison.OrdinalIgnoreCase))
+                    return m.Value;
+                var innerHtml = m.Groups[1].Value;
+                var sb = new StringBuilder();
+                sb.AppendLine();
 
-            sb.AppendLine();
-            return sb.ToString();
-        });
+                var items = ListItemRegex().Matches(innerHtml);
+                foreach (Match item in items)
+                {
+                    var content = StripHtmlTags(item.Groups[1].Value).Trim();
+                    var lines = content.Split('\n');
+                    sb.AppendLine($"- {lines[0].Trim()}");
+                    // Indent continuation lines (already-converted nested items)
+                    for (int i = 1; i < lines.Length; i++)
+                    {
+                        var line = lines[i].Trim();
+                        if (!string.IsNullOrWhiteSpace(line))
+                            sb.AppendLine($"  {line}");
+                    }
+                }
+
+                sb.AppendLine();
+                return sb.ToString();
+            });
+        } while (html != prev);
+
+        return html;
     }
 
     private static string ConvertOrderedLists(string html)
     {
-        return OlRegex().Replace(html, m =>
+        // Process innermost <ol> blocks first so nesting is handled inside-out
+        string prev;
+        do
         {
-            var innerHtml = m.Groups[1].Value;
-            var sb = new StringBuilder();
-            sb.AppendLine();
-
-            var items = ListItemRegex().Matches(innerHtml);
-            int num = 1;
-            foreach (Match item in items)
+            prev = html;
+            html = InnerOlRegex().Replace(html, m =>
             {
-                var text = StripHtmlTags(item.Groups[1].Value).Trim();
-                sb.AppendLine($"{num}. {text}");
-                num++;
-            }
+                var innerHtml = m.Groups[1].Value;
+                var sb = new StringBuilder();
+                sb.AppendLine();
 
-            sb.AppendLine();
-            return sb.ToString();
-        });
+                var items = ListItemRegex().Matches(innerHtml);
+                int num = 1;
+                foreach (Match item in items)
+                {
+                    var content = StripHtmlTags(item.Groups[1].Value).Trim();
+                    var lines = content.Split('\n');
+                    sb.AppendLine($"{num}. {lines[0].Trim()}");
+                    // Indent continuation lines (already-converted nested items)
+                    for (int i = 1; i < lines.Length; i++)
+                    {
+                        var line = lines[i].Trim();
+                        if (!string.IsNullOrWhiteSpace(line))
+                            sb.AppendLine($"   {line}");
+                    }
+                    num++;
+                }
+
+                sb.AppendLine();
+                return sb.ToString();
+            });
+        } while (html != prev);
+
+        return html;
     }
 
     private static string ConvertTables(string html)
@@ -187,14 +220,29 @@ public static partial class HtmlToMarkdownConverter
             var theadMatch = TheadRegex().Match(tableHtml);
             if (theadMatch.Success)
             {
-                var headerCells = CellRegex().Matches(theadMatch.Value);
-                var headers = new List<string>();
-                foreach (Match cell in headerCells)
+                var thCells = ThCellRegex().Matches(theadMatch.Value);
+                if (thCells.Count > 0)
                 {
-                    headers.Add(StripHtmlTags(cell.Groups[1].Value).Trim());
+                    var headers = new List<string>();
+                    var separators = new List<string>();
+                    foreach (Match cell in thCells)
+                    {
+                        headers.Add(StripHtmlTags(cell.Groups[2].Value).Trim());
+                        separators.Add(GetTableSeparator(cell.Groups[1].Value));
+                    }
+                    sb.AppendLine("| " + string.Join(" | ", headers) + " |");
+                    sb.AppendLine("| " + string.Join(" | ", separators) + " |");
                 }
-                sb.AppendLine("| " + string.Join(" | ", headers) + " |");
-                sb.AppendLine("| " + string.Join(" | ", headers.Select(_ => "---")) + " |");
+                else
+                {
+                    // Fallback: use generic th/td cell regex
+                    var headerCells = CellRegex().Matches(theadMatch.Value);
+                    var headers = new List<string>();
+                    foreach (Match cell in headerCells)
+                        headers.Add(StripHtmlTags(cell.Groups[1].Value).Trim());
+                    sb.AppendLine("| " + string.Join(" | ", headers) + " |");
+                    sb.AppendLine("| " + string.Join(" | ", headers.Select(_ => "---")) + " |");
+                }
             }
 
             // Extract body rows
@@ -262,6 +310,13 @@ public static partial class HtmlToMarkdownConverter
 
     private static string ConvertInlineElements(string html)
     {
+        // Resolve span-based formatting emitted by some browsers/editors
+        html = SpanBoldRegex().Replace(html, "<strong>$1</strong>");
+        html = SpanItalicRegex().Replace(html, "<em>$1</em>");
+        html = SpanStrikeRegex().Replace(html, "<del>$1</del>");
+        // Underline has no Markdown equivalent — strip the tag, keep content
+        html = UnderlineTagRegex().Replace(html, "$1");
+
         // Images: <img src="url" alt="text" />
         html = ImgRegex().Replace(html, m =>
         {
@@ -297,9 +352,10 @@ public static partial class HtmlToMarkdownConverter
         html = EmRegex().Replace(html, "*$1*");
         html = ITagRegex().Replace(html, "*$1*");
 
-        // Strikethrough: <del>text</del> or <s>text</s>
+        // Strikethrough: <del>text</del>, <s>text</s>, or <strike>text</strike>
         html = DelRegex().Replace(html, "~~$1~~");
         html = STagRegex().Replace(html, "~~$1~~");
+        html = StrikeTagRegex().Replace(html, "~~$1~~");
 
         // Inline code: <code>text</code> (not inside <pre>)
         html = InlineCodeRegex().Replace(html, "`$1`");
@@ -310,6 +366,32 @@ public static partial class HtmlToMarkdownConverter
     #endregion
 
     #region Utility
+
+    // Converts <div> wrappers that contentEditable uses for new lines
+    private static string ConvertDivs(string html)
+    {
+        // <div><br></div> is an empty line
+        html = DivBrRegex().Replace(html, "\n\n");
+        // <div>content</div> is a line of text
+        html = DivContentRegex().Replace(html, m =>
+        {
+            var content = m.Groups[1].Value.Trim();
+            return string.IsNullOrWhiteSpace(content) ? "\n" : $"{content}\n";
+        });
+        return html;
+    }
+
+    private static string GetTableSeparator(string cellAttributes)
+    {
+        var m = TextAlignRegex().Match(cellAttributes);
+        if (!m.Success) return "---";
+        return m.Groups[1].Value.Trim().ToLowerInvariant() switch
+        {
+            "center" => ":---:",
+            "right" => "---:",
+            _ => "---"
+        };
+    }
 
     internal static string StripHtmlTags(string html)
     {
@@ -330,6 +412,22 @@ public static partial class HtmlToMarkdownConverter
         text = text.Replace("&#39;", "'");
         text = text.Replace("&apos;", "'");
         text = text.Replace("&nbsp;", " ");
+
+        // Numeric decimal entities: &#160; etc.
+        text = NumericEntityRegex().Replace(text, m =>
+        {
+            if (int.TryParse(m.Groups[1].Value, out int code) && code is >= 0 and <= 0xFFFF)
+                return ((char)code).ToString();
+            return m.Value;
+        });
+
+        // Numeric hex entities: &#xA0; etc.
+        text = HexEntityRegex().Replace(text, m =>
+        {
+            if (int.TryParse(m.Groups[1].Value, NumberStyles.HexNumber, null, out int code) && code is >= 0 and <= 0xFFFF)
+                return ((char)code).ToString();
+            return m.Value;
+        });
 
         return text;
     }
@@ -430,6 +528,51 @@ public static partial class HtmlToMarkdownConverter
 
     [GeneratedRegex(@"<[^>]+>")]
     private static partial Regex HtmlTagRegex();
+
+    // Innermost list matching (no nested list tags inside) — used for inside-out processing
+    [GeneratedRegex(@"<ul(?![^>]*task-list)[^>]*>((?:(?!</?ul\b).)*?)</ul>", RegexOptions.IgnoreCase | RegexOptions.Singleline)]
+    private static partial Regex InnerUlRegex();
+
+    [GeneratedRegex(@"<ol[^>]*>((?:(?!</?ol\b).)*?)</ol>", RegexOptions.IgnoreCase | RegexOptions.Singleline)]
+    private static partial Regex InnerOlRegex();
+
+    // <div> handling for contentEditable line wrappers
+    [GeneratedRegex(@"<div[^>]*>\s*<br\s*/?>\s*</div>", RegexOptions.IgnoreCase)]
+    private static partial Regex DivBrRegex();
+
+    [GeneratedRegex(@"<div[^>]*>(.*?)</div>", RegexOptions.IgnoreCase | RegexOptions.Singleline)]
+    private static partial Regex DivContentRegex();
+
+    // Span-based formatting from browsers/editors
+    [GeneratedRegex(@"<span[^>]*style=""[^""]*font-weight\s*:\s*(?:bold|700)[^""]*""[^>]*>(.*?)</span>", RegexOptions.IgnoreCase | RegexOptions.Singleline)]
+    private static partial Regex SpanBoldRegex();
+
+    [GeneratedRegex(@"<span[^>]*style=""[^""]*font-style\s*:\s*italic[^""]*""[^>]*>(.*?)</span>", RegexOptions.IgnoreCase | RegexOptions.Singleline)]
+    private static partial Regex SpanItalicRegex();
+
+    [GeneratedRegex(@"<span[^>]*style=""[^""]*text-decoration\s*:\s*line-through[^""]*""[^>]*>(.*?)</span>", RegexOptions.IgnoreCase | RegexOptions.Singleline)]
+    private static partial Regex SpanStrikeRegex();
+
+    [GeneratedRegex(@"<u>(.*?)</u>", RegexOptions.IgnoreCase | RegexOptions.Singleline)]
+    private static partial Regex UnderlineTagRegex();
+
+    [GeneratedRegex(@"<strike>(.*?)</strike>", RegexOptions.IgnoreCase | RegexOptions.Singleline)]
+    private static partial Regex StrikeTagRegex();
+
+    // Table header cell with attributes (for alignment detection).
+    // \b prevents matching <thead> which also starts with <th.
+    [GeneratedRegex(@"<th\b([^>]*)>(.*?)</th>", RegexOptions.IgnoreCase | RegexOptions.Singleline)]
+    private static partial Regex ThCellRegex();
+
+    [GeneratedRegex(@"text-align\s*:\s*(left|right|center)", RegexOptions.IgnoreCase)]
+    private static partial Regex TextAlignRegex();
+
+    // Numeric HTML entities
+    [GeneratedRegex(@"&#(\d+);")]
+    private static partial Regex NumericEntityRegex();
+
+    [GeneratedRegex(@"&#x([0-9a-fA-F]+);", RegexOptions.IgnoreCase)]
+    private static partial Regex HexEntityRegex();
 
     #endregion
 }
