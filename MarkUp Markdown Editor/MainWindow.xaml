@@ -124,13 +124,13 @@
                     </MenuFlyoutItem.KeyboardAccelerators>
                 </MenuFlyoutItem>
                 <MenuFlyoutSeparator />
-                <MenuFlyoutSubItem Text="Heading">
-                    <MenuFlyoutItem Text="Heading 1" Click="MenuHeading1_Click" />
-                    <MenuFlyoutItem Text="Heading 2" Click="MenuHeading2_Click" />
-                    <MenuFlyoutItem Text="Heading 3" Click="MenuHeading3_Click" />
-                    <MenuFlyoutItem Text="Heading 4" Click="MenuHeading4_Click" />
-                    <MenuFlyoutItem Text="Heading 5" Click="MenuHeading5_Click" />
-                    <MenuFlyoutItem Text="Heading 6" Click="MenuHeading6_Click" />
+                <MenuFlyoutSubItem x:Name="MenuHeading" Text="Heading">
+                    <MenuFlyoutItem x:Name="MenuHeading1" Text="Heading 1" Click="MenuHeading1_Click" />
+                    <MenuFlyoutItem x:Name="MenuHeading2" Text="Heading 2" Click="MenuHeading2_Click" />
+                    <MenuFlyoutItem x:Name="MenuHeading3" Text="Heading 3" Click="MenuHeading3_Click" />
+                    <MenuFlyoutItem x:Name="MenuHeading4" Text="Heading 4" Click="MenuHeading4_Click" />
+                    <MenuFlyoutItem x:Name="MenuHeading5" Text="Heading 5" Click="MenuHeading5_Click" />
+                    <MenuFlyoutItem x:Name="MenuHeading6" Text="Heading 6" Click="MenuHeading6_Click" />
                 </MenuFlyoutSubItem>
                 <MenuFlyoutSeparator />
                 <MenuFlyoutItem x:Name="MenuUnorderedList" Text="Bullet List" Click="MenuUnorderedList_Click" />
@@ -246,6 +246,82 @@
             </CommandBar.SecondaryCommands>
         </CommandBar>
 
+        <!-- Automation bridge: Canvas overlay declared AFTER CommandBar but BEFORE the
+             main content Grid. WinUI3 Grid UIA traversal follows XAML declaration order,
+             so placing this Canvas before the main content Grid means WinAppDriver's
+             FindFirst stops here WITHOUT entering Chrome's WebView2 accessibility subtree.
+             Grid.Row=0 Grid.RowSpan=4 makes it span the full window visually (for Z-order)
+             while still appearing early in the UIA tree due to XAML position.
+             Buttons: Width/Height=1 with MinWidth/MinHeight=0 forces WinAppDriver to
+             use IInvokeProvider.Invoke() rather than a pointer click. -->
+        <Canvas Grid.Row="0"
+                Grid.RowSpan="4"
+                HorizontalAlignment="Left"
+                VerticalAlignment="Top"
+                Width="10"
+                Height="10"
+                IsHitTestVisible="True"
+                AutomationProperties.AutomationId="AutomationBridgePanel">
+            <Button x:Name="AutomationFocusEditorButton"
+                    Canvas.Left="0" Canvas.Top="0"
+                    Width="1" Height="1" Padding="0" MinWidth="0" MinHeight="0"
+                    Opacity="0.01"
+                    Content="AE"
+                    Click="AutomationFocusEditorButton_Click"
+                    AutomationProperties.AutomationId="AutomationFocusEditorButton" />
+            <Button x:Name="AutomationFocusPreviewButton"
+                    Canvas.Left="2" Canvas.Top="0"
+                    Width="1" Height="1" Padding="0" MinWidth="0" MinHeight="0"
+                    Opacity="0.01"
+                    Content="AP"
+                    Click="AutomationFocusPreviewButton_Click"
+                    AutomationProperties.AutomationId="AutomationFocusPreviewButton" />
+            <Button x:Name="AutomationPreviewInsertTextButton"
+                    Canvas.Left="4" Canvas.Top="0"
+                    Width="1" Height="1" Padding="0" MinWidth="0" MinHeight="0"
+                    Opacity="0.01"
+                    Content="APT"
+                    Click="AutomationPreviewInsertTextButton_Click"
+                    AutomationProperties.AutomationId="AutomationPreviewInsertTextButton" />
+            <Button x:Name="AutomationPreviewBoldButton"
+                    Canvas.Left="6" Canvas.Top="0"
+                    Width="1" Height="1" Padding="0" MinWidth="0" MinHeight="0"
+                    Opacity="0.01"
+                    Content="APB"
+                    Click="AutomationPreviewBoldButton_Click"
+                    AutomationProperties.AutomationId="AutomationPreviewBoldButton" />
+            <TextBlock x:Name="AutomationDocumentContent"
+                       Canvas.Left="0" Canvas.Top="2"
+                       Width="1" Height="1"
+                       Opacity="0.01"
+                       Text=""
+                       AutomationProperties.AutomationId="AutomationDocumentContent" />
+            <TextBlock x:Name="AutomationPreviewHtml"
+                       Canvas.Left="2" Canvas.Top="2"
+                       Width="1" Height="1"
+                       Opacity="0.01"
+                       Text=""
+                       AutomationProperties.AutomationId="AutomationPreviewHtml" />
+            <TextBlock x:Name="AutomationFocusedPanel"
+                       Canvas.Left="4" Canvas.Top="2"
+                       Width="1" Height="1"
+                       Opacity="0.01"
+                       Text="None"
+                       AutomationProperties.AutomationId="AutomationFocusedPanel" />
+            <TextBlock x:Name="AutomationLastSyncSource"
+                       Canvas.Left="6" Canvas.Top="2"
+                       Width="1" Height="1"
+                       Opacity="0.01"
+                       Text="None"
+                       AutomationProperties.AutomationId="AutomationLastSyncSource" />
+            <TextBlock x:Name="AutomationViewMode"
+                       Canvas.Left="8" Canvas.Top="2"
+                       Width="1" Height="1"
+                       Opacity="0.01"
+                       Text="Split"
+                       AutomationProperties.AutomationId="AutomationViewMode" />
+        </Canvas>
+
         <!-- Main Content: Editor + Preview -->
         <Grid Grid.Row="2">
             <Grid.ColumnDefinitions>
@@ -352,20 +428,20 @@
                 Margin="0,0,16,0" Visibility="Collapsed">
             <StackPanel Spacing="6">
                 <StackPanel Orientation="Horizontal" Spacing="4">
-                    <TextBox x:Name="FindTextBox" PlaceholderText="Find..." Width="200" Height="32" />
-                    <Button x:Name="FindPrevButton" Content="▲" ToolTipService.ToolTip="Find Previous" Click="FindPrev_Click" Width="32" Height="32" Padding="0" />
-                    <Button x:Name="FindNextButton" Content="▼" ToolTipService.ToolTip="Find Next" Click="FindNext_Click" Width="32" Height="32" Padding="0" />
-                    <Button x:Name="CloseFindButton" Content="✕" ToolTipService.ToolTip="Close" Click="CloseFindBar_Click" Width="32" Height="32" Padding="0" />
+                    <TextBox x:Name="FindTextBox" PlaceholderText="Find..." Width="200" Height="32" AutomationProperties.AutomationId="FindTextBox" />
+                    <Button x:Name="FindPrevButton" Content="▲" ToolTipService.ToolTip="Find Previous" Click="FindPrev_Click" Width="32" Height="32" Padding="0" AutomationProperties.AutomationId="FindPrevButton" />
+                    <Button x:Name="FindNextButton" Content="▼" ToolTipService.ToolTip="Find Next" Click="FindNext_Click" Width="32" Height="32" Padding="0" AutomationProperties.AutomationId="FindNextButton" />
+                    <Button x:Name="CloseFindButton" Content="✕" ToolTipService.ToolTip="Close" Click="CloseFindBar_Click" Width="32" Height="32" Padding="0" AutomationProperties.AutomationId="CloseFindButton" />
                 </StackPanel>
                 <StackPanel Orientation="Horizontal" Spacing="4">
-                    <TextBox x:Name="ReplaceTextBox" PlaceholderText="Replace..." Width="200" Height="32" />
-                    <Button x:Name="ReplaceButton" Content="Replace" ToolTipService.ToolTip="Replace" Click="Replace_Click" Height="32" />
-                    <Button x:Name="ReplaceAllButton" Content="All" ToolTipService.ToolTip="Replace All" Click="ReplaceAll_Click" Height="32" />
+                    <TextBox x:Name="ReplaceTextBox" PlaceholderText="Replace..." Width="200" Height="32" AutomationProperties.AutomationId="ReplaceTextBox" />
+                    <Button x:Name="ReplaceButton" Content="Replace" ToolTipService.ToolTip="Replace" Click="Replace_Click" Height="32" AutomationProperties.AutomationId="ReplaceButton" />
+                    <Button x:Name="ReplaceAllButton" Content="All" ToolTipService.ToolTip="Replace All" Click="ReplaceAll_Click" Height="32" AutomationProperties.AutomationId="ReplaceAllButton" />
                 </StackPanel>
                 <StackPanel Orientation="Horizontal" Spacing="8">
-                    <CheckBox x:Name="FindMatchCase" Content="Match case" />
+                    <CheckBox x:Name="FindMatchCase" Content="Match case" AutomationProperties.AutomationId="FindMatchCase" />
                 </StackPanel>
             </StackPanel>
         </Border>
-    </Grid>
-</Window>
+        </Grid>
+    </Window>
