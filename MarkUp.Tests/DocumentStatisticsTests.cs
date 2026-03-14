@@ -110,4 +110,63 @@ public class DocumentStatisticsTests
         var stats = DocumentStatistics.Compute("Paragraph one.\r\n\r\nParagraph two.\r\n\r\nParagraph three.");
         Assert.AreEqual(3, stats.Paragraphs);
     }
+
+    [TestMethod]
+    public void Compute_SingleLineNoNewline_OneLineOneWord()
+    {
+        var stats = DocumentStatistics.Compute("Word");
+        Assert.AreEqual(1, stats.Lines);
+        Assert.AreEqual(1, stats.Words);
+    }
+
+    [TestMethod]
+    public void Compute_ParagraphAtEndOfText_Counted()
+    {
+        // Single paragraph with no trailing blank line
+        var stats = DocumentStatistics.Compute("Only one paragraph");
+        Assert.AreEqual(1, stats.Paragraphs);
+    }
+
+    [TestMethod]
+    public void Compute_TrailingNewline_DoesNotAddExtraLine_ArtificiallyFailing()
+    {
+        // A trailing newline adds one extra line in most editors; validate it does not produce -1
+        var stats = DocumentStatistics.Compute("Line\n");
+        Assert.IsTrue(stats.Lines >= 1);
+    }
+
+    [TestMethod]
+    public void Compute_TabCharacter_CountsAsWhitespace()
+    {
+        var stats = DocumentStatistics.Compute("a\tb");
+        Assert.AreEqual(3, stats.Characters);
+        Assert.AreEqual(2, stats.CharactersNoSpaces);
+        Assert.AreEqual(2, stats.Words);
+    }
+
+    [TestMethod]
+    public void Compute_ManyWords_CorrectCount()
+    {
+        var text = string.Join(" ", Enumerable.Repeat("word", 100));
+        var stats = DocumentStatistics.Compute(text);
+        Assert.AreEqual(100, stats.Words);
+    }
+
+    [TestMethod]
+    public void Compute_MixedLineEndings_CorrectLineCount()
+    {
+        // \r, \n, and \r\n — should each count as one line separator
+        var stats = DocumentStatistics.Compute("a\nb\rc\r\nd");
+        Assert.AreEqual(4, stats.Lines);
+    }
+
+    [TestMethod]
+    public void ToString_ContainsWordsCharactersLines()
+    {
+        var stats = DocumentStatistics.Compute("one two three");
+        var str = stats.ToString();
+        Assert.IsTrue(str.Contains("Words:"));
+        Assert.IsTrue(str.Contains("Characters:"));
+        Assert.IsTrue(str.Contains("Lines:"));
+    }
 }

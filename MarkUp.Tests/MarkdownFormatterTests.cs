@@ -184,4 +184,167 @@ public class MarkdownFormatterTests
         var result = MarkdownFormatter.GetLineEnd("Line1\nLine2", 6);
         Assert.AreEqual(11, result);
     }
+
+    // ── Toggle operations – already wrapped ──────────────────────────────────
+
+    [TestMethod]
+    public void ToggleStrikethrough_AlreadyStrikethrough_RemovesMarkers()
+    {
+        var result = MarkdownFormatter.ToggleStrikethrough("Hello ~~world~~", 6, 9);
+        Assert.AreEqual("Hello world", result.NewText);
+    }
+
+    [TestMethod]
+    public void ToggleInlineCode_AlreadyCode_RemovesMarkers()
+    {
+        var result = MarkdownFormatter.ToggleInlineCode("Use `log` here", 4, 5);
+        Assert.AreEqual("Use log here", result.NewText);
+    }
+
+    // ── Toggle operations – no selection ─────────────────────────────────────
+
+    [TestMethod]
+    public void ToggleItalic_NoSelection_InsertsPairMarkers()
+    {
+        var result = MarkdownFormatter.ToggleItalic("Hello ", 6, 0);
+        Assert.AreEqual("Hello **", result.NewText);
+        Assert.AreEqual(7, result.NewSelectionStart);
+    }
+
+    [TestMethod]
+    public void ToggleStrikethrough_NoSelection_InsertsPairMarkers()
+    {
+        var result = MarkdownFormatter.ToggleStrikethrough("Start ", 6, 0);
+        Assert.AreEqual("Start ~~~~", result.NewText);
+        Assert.AreEqual(8, result.NewSelectionStart);
+    }
+
+    // ── Heading levels ────────────────────────────────────────────────────────
+
+    [TestMethod]
+    public void InsertHeading_Level3_AddsPrefix()
+    {
+        var result = MarkdownFormatter.InsertHeading("Content", 0, 3);
+        Assert.AreEqual("### Content", result.NewText);
+    }
+
+    [TestMethod]
+    public void InsertHeading_Level4_AddsPrefix()
+    {
+        var result = MarkdownFormatter.InsertHeading("Content", 0, 4);
+        Assert.AreEqual("#### Content", result.NewText);
+    }
+
+    [TestMethod]
+    public void InsertHeading_Level5_AddsPrefix()
+    {
+        var result = MarkdownFormatter.InsertHeading("Content", 0, 5);
+        Assert.AreEqual("##### Content", result.NewText);
+    }
+
+    [TestMethod]
+    public void InsertHeading_Level6_AddsPrefix()
+    {
+        var result = MarkdownFormatter.InsertHeading("Content", 0, 6);
+        Assert.AreEqual("###### Content", result.NewText);
+    }
+
+    [TestMethod]
+    public void InsertHeading_LevelOutOfRange_DefaultsToH1()
+    {
+        var result = MarkdownFormatter.InsertHeading("Content", 0, 9);
+        Assert.AreEqual("# Content", result.NewText);
+    }
+
+    // ── InsertHorizontalRule ──────────────────────────────────────────────────
+
+    [TestMethod]
+    public void InsertHorizontalRule_SurroundedByNewlines()
+    {
+        var result = MarkdownFormatter.InsertHorizontalRule("Before", 6);
+        Assert.IsTrue(result.NewText.Contains("\n\n---\n\n"));
+    }
+
+    // ── InsertLink ────────────────────────────────────────────────────────────
+
+    [TestMethod]
+    public void InsertLink_NoSelection_SelectsLinkText()
+    {
+        var result = MarkdownFormatter.InsertLink("", 0, 0);
+        Assert.IsTrue(result.NewText.Contains("[link text](url)"));
+        Assert.AreEqual(1, result.NewSelectionStart);
+        Assert.AreEqual("link text".Length, result.NewSelectionLength);
+    }
+
+    [TestMethod]
+    public void InsertLink_WithSelection_SelectedTextBecomesLinkText()
+    {
+        var result = MarkdownFormatter.InsertLink("visit example site", 6, 7);
+        Assert.IsTrue(result.NewText.Contains("[example](url)"));
+    }
+
+    // ── InsertImage ───────────────────────────────────────────────────────────
+
+    [TestMethod]
+    public void InsertImage_WithSelection_UsesSelectionAsAlt()
+    {
+        var result = MarkdownFormatter.InsertImage("logo here", 0, 4);
+        Assert.IsTrue(result.NewText.Contains("![logo](image-url)"));
+    }
+
+    [TestMethod]
+    public void InsertImage_NoSelection_UsesDefaultAlt()
+    {
+        var result = MarkdownFormatter.InsertImage("", 0, 0);
+        Assert.IsTrue(result.NewText.Contains("![alt text](image-url)"));
+    }
+
+    // ── InsertCodeBlock ───────────────────────────────────────────────────────
+
+    [TestMethod]
+    public void InsertCodeBlock_CursorPlacedInsideBlock()
+    {
+        var result = MarkdownFormatter.InsertCodeBlock("", 0, 0);
+        Assert.IsTrue(result.NewText.Contains("```"));
+        Assert.IsTrue(result.NewSelectionStart > 0);
+    }
+
+    // ── InsertTable ───────────────────────────────────────────────────────────
+
+    [TestMethod]
+    public void InsertTable_SingleColumn_ProducesCorrectStructure()
+    {
+        var result = MarkdownFormatter.InsertTable("", 0, 1, 1);
+        Assert.IsTrue(result.NewText.Contains("| Header 1 |"));
+        Assert.IsTrue(result.NewText.Contains("| --- |"));
+        Assert.IsTrue(result.NewText.Contains("| Cell |"));
+    }
+
+    [TestMethod]
+    public void InsertTable_ZeroRowsDefaultsToTwo()
+    {
+        var result = MarkdownFormatter.InsertTable("", 0, 0, 2);
+        var cellCount = result.NewText.Split("| Cell |").Length - 1;
+        Assert.IsTrue(cellCount >= 2);
+    }
+
+    // ── GetLineStart / GetLineEnd edge cases ──────────────────────────────────
+
+    [TestMethod]
+    public void GetLineStart_AtZero_ReturnsZero()
+    {
+        Assert.AreEqual(0, MarkdownFormatter.GetLineStart("Hello", 0));
+    }
+
+    [TestMethod]
+    public void GetLineStart_EmptyString_ReturnsZero()
+    {
+        Assert.AreEqual(0, MarkdownFormatter.GetLineStart("", 0));
+    }
+
+    [TestMethod]
+    public void GetLineEnd_EmptyString_ReturnsZero()
+    {
+        Assert.AreEqual(0, MarkdownFormatter.GetLineEnd("", 0));
+    }
 }

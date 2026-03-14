@@ -450,4 +450,269 @@ public class HtmlToMarkdownConverterTests
     }
 
     #endregion
+
+    #region Span-based formatting (contentEditable output)
+
+    [TestMethod]
+    public void Convert_SpanBold_ToBold()
+    {
+        var html = "<p><span style=\"font-weight: bold\">heavy</span></p>";
+        var result = HtmlToMarkdownConverter.Convert(html);
+        Assert.IsTrue(result.Contains("**heavy**"));
+    }
+
+    [TestMethod]
+    public void Convert_SpanBold700_ToBold()
+    {
+        var html = "<p><span style=\"font-weight: 700\">strong</span></p>";
+        var result = HtmlToMarkdownConverter.Convert(html);
+        Assert.IsTrue(result.Contains("**strong**"));
+    }
+
+    [TestMethod]
+    public void Convert_SpanItalic_ToItalic()
+    {
+        var html = "<p><span style=\"font-style: italic\">slant</span></p>";
+        var result = HtmlToMarkdownConverter.Convert(html);
+        Assert.IsTrue(result.Contains("*slant*"));
+    }
+
+    [TestMethod]
+    public void Convert_SpanLineThrough_ToStrikethrough()
+    {
+        var html = "<p><span style=\"text-decoration: line-through\">struck</span></p>";
+        var result = HtmlToMarkdownConverter.Convert(html);
+        Assert.IsTrue(result.Contains("~~struck~~"));
+    }
+
+    [TestMethod]
+    public void Convert_UnderlineTag_StripsTagKeepsContent()
+    {
+        var html = "<p><u>underlined</u></p>";
+        var result = HtmlToMarkdownConverter.Convert(html);
+        Assert.IsTrue(result.Contains("underlined"));
+        Assert.IsFalse(result.Contains("<u>"));
+        Assert.IsFalse(result.Contains("</u>"));
+    }
+
+    [TestMethod]
+    public void Convert_StrikeTag_ToStrikethrough()
+    {
+        var html = "<p><strike>old</strike></p>";
+        var result = HtmlToMarkdownConverter.Convert(html);
+        Assert.IsTrue(result.Contains("~~old~~"));
+    }
+
+    #endregion
+
+    #region Div wrappers (contentEditable line wrapping)
+
+    [TestMethod]
+    public void Convert_DivWithText_ExtractsText()
+    {
+        var html = "<div>Hello world</div>";
+        var result = HtmlToMarkdownConverter.Convert(html);
+        Assert.IsTrue(result.Contains("Hello world"));
+    }
+
+    [TestMethod]
+    public void Convert_MultipleDivs_EachBecomesLine()
+    {
+        var html = "<div>Line one</div><div>Line two</div>";
+        var result = HtmlToMarkdownConverter.Convert(html);
+        Assert.IsTrue(result.Contains("Line one"));
+        Assert.IsTrue(result.Contains("Line two"));
+    }
+
+    [TestMethod]
+    public void Convert_DivWithBr_BecomesBlankLine()
+    {
+        var html = "<p>Before</p><div><br /></div><p>After</p>";
+        var result = HtmlToMarkdownConverter.Convert(html);
+        Assert.IsTrue(result.Contains("Before"));
+        Assert.IsTrue(result.Contains("After"));
+    }
+
+    [TestMethod]
+    public void Convert_EmptyDiv_DoesNotCrash()
+    {
+        var result = HtmlToMarkdownConverter.Convert("<div></div>");
+        Assert.IsNotNull(result);
+    }
+
+    #endregion
+
+    #region Nested lists
+
+    [TestMethod]
+    public void Convert_NestedUnorderedList_IndentsChildItems()
+    {
+        var html = "<ul><li>Parent<ul><li>Child</li></ul></li><li>Sibling</li></ul>";
+        var result = HtmlToMarkdownConverter.Convert(html);
+        Assert.IsTrue(result.Contains("- Parent"));
+        Assert.IsTrue(result.Contains("Child"));
+        Assert.IsTrue(result.Contains("- Sibling"));
+    }
+
+    [TestMethod]
+    public void Convert_NestedOrderedList_IndentsChildItems()
+    {
+        var html = "<ol><li>First<ol><li>Sub</li></ol></li><li>Second</li></ol>";
+        var result = HtmlToMarkdownConverter.Convert(html);
+        Assert.IsTrue(result.Contains("1. First"));
+        Assert.IsTrue(result.Contains("Sub"));
+        Assert.IsTrue(result.Contains("2. Second"));
+    }
+
+    #endregion
+
+    #region Task lists
+
+    [TestMethod]
+    public void Convert_TaskListChecked_ToCheckedMarkdown()
+    {
+        var html = "<ul class=\"task-list\"><li><input type=\"checkbox\" checked /> Done</li></ul>";
+        var result = HtmlToMarkdownConverter.Convert(html);
+        Assert.IsTrue(result.Contains("[x] Done") || result.Contains("[X] Done"));
+    }
+
+    [TestMethod]
+    public void Convert_TaskListUnchecked_ToUncheckedMarkdown()
+    {
+        var html = "<ul class=\"task-list\"><li><input type=\"checkbox\" /> Pending</li></ul>";
+        var result = HtmlToMarkdownConverter.Convert(html);
+        Assert.IsTrue(result.Contains("[ ] Pending"));
+    }
+
+    #endregion
+
+    #region Table alignment
+
+    [TestMethod]
+    public void Convert_TableWithCenterAlignedTh_ProducesCenterSeparator()
+    {
+        var html = "<table><thead><tr>" +
+                   "<th style=\"text-align: center\">Name</th>" +
+                   "</tr></thead><tbody><tr><td>Alice</td></tr></tbody></table>";
+        var result = HtmlToMarkdownConverter.Convert(html);
+        Assert.IsTrue(result.Contains(":---:"));
+        Assert.IsTrue(result.Contains("Name"));
+    }
+
+    [TestMethod]
+    public void Convert_TableWithRightAlignedTh_ProducesRightSeparator()
+    {
+        var html = "<table><thead><tr>" +
+                   "<th style=\"text-align: right\">Amount</th>" +
+                   "</tr></thead><tbody><tr><td>100</td></tr></tbody></table>";
+        var result = HtmlToMarkdownConverter.Convert(html);
+        Assert.IsTrue(result.Contains("---:"));
+        Assert.IsTrue(result.Contains("Amount"));
+    }
+
+    [TestMethod]
+    public void Convert_TableWithNoAlignment_ProducesDefaultSeparator()
+    {
+        var html = "<table><thead><tr><th>Column</th></tr></thead>" +
+                   "<tbody><tr><td>Value</td></tr></tbody></table>";
+        var result = HtmlToMarkdownConverter.Convert(html);
+        Assert.IsTrue(result.Contains("---"));
+        Assert.IsTrue(result.Contains("Column"));
+    }
+
+    #endregion
+
+    #region Numeric HTML entities
+
+    [TestMethod]
+    public void DecodeHtmlEntities_NumericDecimal_DecodesCorrectly()
+    {
+        // &#65; = 'A'
+        Assert.AreEqual("A", HtmlToMarkdownConverter.DecodeHtmlEntities("&#65;"));
+    }
+
+    [TestMethod]
+    public void DecodeHtmlEntities_NumericHex_DecodesCorrectly()
+    {
+        // &#x41; = 'A'
+        Assert.AreEqual("A", HtmlToMarkdownConverter.DecodeHtmlEntities("&#x41;"));
+    }
+
+    [TestMethod]
+    public void DecodeHtmlEntities_Apostrophe_DecodesCorrectly()
+    {
+        Assert.AreEqual("it's", HtmlToMarkdownConverter.DecodeHtmlEntities("it&#39;s"));
+    }
+
+    [TestMethod]
+    public void DecodeHtmlEntities_Apos_DecodesCorrectly()
+    {
+        Assert.AreEqual("it's", HtmlToMarkdownConverter.DecodeHtmlEntities("it&apos;s"));
+    }
+
+    [TestMethod]
+    public void DecodeHtmlEntities_NumericOutOfRange_LeftAsIs()
+    {
+        // Values > 0xFFFF should be returned unchanged
+        var input = "&#x10000;";
+        var result = HtmlToMarkdownConverter.DecodeHtmlEntities(input);
+        Assert.IsNotNull(result);
+    }
+
+    #endregion
+
+    #region Mixed / edge cases
+
+    [TestMethod]
+    public void Convert_NestedInlineInParagraph_AllConverted()
+    {
+        var html = "<p><strong>bold</strong> and <em>italic</em> and <code>code</code></p>";
+        var result = HtmlToMarkdownConverter.Convert(html);
+        Assert.IsTrue(result.Contains("**bold**"));
+        Assert.IsTrue(result.Contains("*italic*"));
+        Assert.IsTrue(result.Contains("`code`"));
+    }
+
+    [TestMethod]
+    public void Convert_LinkInsideParagraph_ConvertsLink()
+    {
+        var html = "<p>Visit <a href=\"https://example.com\">Example</a> now</p>";
+        var result = HtmlToMarkdownConverter.Convert(html);
+        Assert.IsTrue(result.Contains("[Example](https://example.com)"));
+    }
+
+    [TestMethod]
+    public void Convert_ImageInsideParagraph_ConvertsImage()
+    {
+        var html = "<p>Here is <img src=\"img.png\" alt=\"pic\" /> an image</p>";
+        var result = HtmlToMarkdownConverter.Convert(html);
+        Assert.IsTrue(result.Contains("![pic](img.png)"));
+    }
+
+    [TestMethod]
+    public void Convert_MultipleConsecutiveBr_DoesNotCrash()
+    {
+        var result = HtmlToMarkdownConverter.Convert("<p>a<br /><br /><br />b</p>");
+        Assert.IsTrue(result.Contains("a"));
+        Assert.IsTrue(result.Contains("b"));
+    }
+
+    [TestMethod]
+    public void Convert_BrTagWithoutSlash_Converts()
+    {
+        var result = HtmlToMarkdownConverter.Convert("line one<br>line two");
+        Assert.IsTrue(result.Contains("line one"));
+        Assert.IsTrue(result.Contains("line two"));
+    }
+
+    [TestMethod]
+    public void Convert_LargeDocument_DoesNotCrash()
+    {
+        var headings = string.Concat(Enumerable.Range(1, 50).Select(i => $"<h2>Section {i}</h2><p>Paragraph {i}.</p>"));
+        var result = HtmlToMarkdownConverter.Convert(headings);
+        Assert.IsTrue(result.Contains("## Section 1"));
+        Assert.IsTrue(result.Contains("## Section 50"));
+    }
+
+    #endregion
 }

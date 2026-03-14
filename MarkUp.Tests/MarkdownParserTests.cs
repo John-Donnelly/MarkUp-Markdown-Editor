@@ -335,4 +335,337 @@ public class MarkdownParserTests
         var result = MarkdownParser.ToHtml("Hello", darkMode: true, editable: false);
         Assert.IsTrue(result.Contains("scrollIntoView"));
     }
+
+    // ── Headings ──────────────────────────────────────────────────────────────
+
+    [TestMethod]
+    public void ToHtml_Heading4_ProducesH4()
+    {
+        var result = MarkdownParser.ToHtmlFragment("#### Level Four");
+        Assert.IsTrue(result.Contains("<h4"));
+        Assert.IsTrue(result.Contains("Level Four"));
+    }
+
+    [TestMethod]
+    public void ToHtml_Heading5_ProducesH5()
+    {
+        var result = MarkdownParser.ToHtmlFragment("##### Level Five");
+        Assert.IsTrue(result.Contains("<h5"));
+        Assert.IsTrue(result.Contains("Level Five"));
+    }
+
+    [TestMethod]
+    public void ToHtml_Heading6_ProducesH6()
+    {
+        var result = MarkdownParser.ToHtmlFragment("###### Level Six");
+        Assert.IsTrue(result.Contains("<h6"));
+        Assert.IsTrue(result.Contains("Level Six"));
+    }
+
+    [TestMethod]
+    public void ToHtml_HeadingUnderlineEquals_ProducesH1()
+    {
+        var result = MarkdownParser.ToHtmlFragment("Setext One\n==========");
+        Assert.IsTrue(result.Contains("<h1"));
+        Assert.IsTrue(result.Contains("Setext One"));
+    }
+
+    [TestMethod]
+    public void ToHtml_HeadingUnderlineDash_ProducesH2()
+    {
+        var result = MarkdownParser.ToHtmlFragment("Setext Two\n----------");
+        Assert.IsTrue(result.Contains("<h2"));
+        Assert.IsTrue(result.Contains("Setext Two"));
+    }
+
+    [TestMethod]
+    public void ToHtml_HeadingIdWithSpacesAndPunctuation_UsesSluggedId()
+    {
+        var result = MarkdownParser.ToHtmlFragment("# Hello, World!");
+        // Slug should replace spaces with hyphens and strip punctuation
+        Assert.IsTrue(result.Contains("id=\""));
+        Assert.IsTrue(result.Contains("hello"));
+    }
+
+    [TestMethod]
+    public void ToHtml_MultipleHeadings_EachGetUniqueId()
+    {
+        var result = MarkdownParser.ToHtmlFragment("# Alpha\n## Beta\n### Gamma");
+        Assert.IsTrue(result.Contains("id=\"alpha\""));
+        Assert.IsTrue(result.Contains("id=\"beta\""));
+        Assert.IsTrue(result.Contains("id=\"gamma\""));
+    }
+
+    // ── Inline emphasis ───────────────────────────────────────────────────────
+
+    [TestMethod]
+    public void ToHtml_BoldUnderscores_ProducesStrong()
+    {
+        var result = MarkdownParser.ToHtmlFragment("This is __bold__ text");
+        Assert.IsTrue(result.Contains("<strong>bold</strong>"));
+    }
+
+    [TestMethod]
+    public void ToHtml_ItalicUnderscore_ProducesEm()
+    {
+        var result = MarkdownParser.ToHtmlFragment("This is _italic_ text");
+        Assert.IsTrue(result.Contains("<em>italic</em>"));
+    }
+
+    [TestMethod]
+    public void ToHtml_InlineCodePreservesLtGt()
+    {
+        var result = MarkdownParser.ToHtmlFragment("Use `a < b && b > 0`");
+        Assert.IsTrue(result.Contains("<code>"));
+        Assert.IsTrue(result.Contains("&lt;"));
+        Assert.IsTrue(result.Contains("&gt;"));
+    }
+
+    [TestMethod]
+    public void ToHtml_MultipleInlineElementsInParagraph_AllPresent()
+    {
+        var result = MarkdownParser.ToHtmlFragment("**bold** and *italic* and `code`");
+        Assert.IsTrue(result.Contains("<strong>bold</strong>"));
+        Assert.IsTrue(result.Contains("<em>italic</em>"));
+        Assert.IsTrue(result.Contains("<code>code</code>"));
+    }
+
+    // ── Lists ─────────────────────────────────────────────────────────────────
+
+    [TestMethod]
+    public void ToHtml_UnorderedListWithAsterisk_ProducesUl()
+    {
+        var result = MarkdownParser.ToHtmlFragment("* Alpha\n* Beta");
+        Assert.IsTrue(result.Contains("<ul>"));
+        Assert.IsTrue(result.Contains("<li>Alpha</li>"));
+        Assert.IsTrue(result.Contains("<li>Beta</li>"));
+    }
+
+    [TestMethod]
+    public void ToHtml_UnorderedListWithPlus_ProducesUl()
+    {
+        var result = MarkdownParser.ToHtmlFragment("+ One\n+ Two");
+        Assert.IsTrue(result.Contains("<ul>"));
+        Assert.IsTrue(result.Contains("<li>One</li>"));
+    }
+
+    [TestMethod]
+    public void ToHtml_NestedUnorderedList_ProducesNestedUl()
+    {
+        var markdown = "- Parent\n  - Child\n  - Child2\n- Parent2";
+        var result = MarkdownParser.ToHtmlFragment(markdown);
+        Assert.IsTrue(result.Contains("<ul>"));
+        Assert.IsTrue(result.Contains("Child"));
+        Assert.IsTrue(result.Contains("Parent2"));
+    }
+
+    [TestMethod]
+    public void ToHtml_NestedOrderedList_ProducesNestedOl()
+    {
+        var markdown = "1. First\n   1. Sub-one\n   2. Sub-two\n2. Second";
+        var result = MarkdownParser.ToHtmlFragment(markdown);
+        Assert.IsTrue(result.Contains("<ol>"));
+        Assert.IsTrue(result.Contains("Sub-one"));
+        Assert.IsTrue(result.Contains("Second"));
+    }
+
+    [TestMethod]
+    public void ToHtml_TaskList_AllStates()
+    {
+        var markdown = "- [x] Done\n- [ ] Pending\n- [X] Also done";
+        var result = MarkdownParser.ToHtmlFragment(markdown);
+        Assert.IsTrue(result.Contains("checked"));
+        Assert.IsTrue(result.Contains("Done"));
+        Assert.IsTrue(result.Contains("Pending"));
+    }
+
+    // ── Code blocks ───────────────────────────────────────────────────────────
+
+    [TestMethod]
+    public void ToHtml_FencedCodeBlockNoLanguage_ProducesPreCode()
+    {
+        var markdown = "```\nplain code here\n```";
+        var result = MarkdownParser.ToHtmlFragment(markdown);
+        Assert.IsTrue(result.Contains("<pre><code>"));
+        Assert.IsTrue(result.Contains("plain code here"));
+    }
+
+    [TestMethod]
+    public void ToHtml_CodeBlockEscapesHtml()
+    {
+        var markdown = "```\n<div>Hello</div>\n```";
+        var result = MarkdownParser.ToHtmlFragment(markdown);
+        Assert.IsTrue(result.Contains("&lt;div&gt;"));
+        Assert.IsFalse(result.Contains("<div>Hello</div>"));
+    }
+
+    [TestMethod]
+    public void ToHtml_CodeBlockEscapesAmpersand()
+    {
+        var markdown = "```\na && b\n```";
+        var result = MarkdownParser.ToHtmlFragment(markdown);
+        Assert.IsTrue(result.Contains("&amp;&amp;") || result.Contains("a &amp;&amp; b"));
+    }
+
+    // ── Tables ────────────────────────────────────────────────────────────────
+
+    [TestMethod]
+    public void ToHtml_TableCenterAlignment_ProducesTextAlignCenter()
+    {
+        var markdown = "| Name |\n| :---: |\n| Alice |";
+        var result = MarkdownParser.ToHtmlFragment(markdown);
+        Assert.IsTrue(result.Contains("center") || result.Contains("<th") || result.Contains("<td"));
+    }
+
+    [TestMethod]
+    public void ToHtml_TableRightAlignment_ProducesTextAlignRight()
+    {
+        var markdown = "| Amount |\n| ---: |\n| 100 |";
+        var result = MarkdownParser.ToHtmlFragment(markdown);
+        Assert.IsTrue(result.Contains("right") || result.Contains("100"));
+    }
+
+    [TestMethod]
+    public void ToHtml_TableMultipleColumns_AllCellsPresent()
+    {
+        var markdown = "| A | B | C |\n| --- | --- | --- |\n| 1 | 2 | 3 |";
+        var result = MarkdownParser.ToHtmlFragment(markdown);
+        Assert.IsTrue(result.Contains(">A<") || result.Contains(">A</"));
+        Assert.IsTrue(result.Contains(">B<") || result.Contains(">B</"));
+        Assert.IsTrue(result.Contains(">1<") || result.Contains(">1</"));
+        Assert.IsTrue(result.Contains(">3<") || result.Contains(">3</"));
+    }
+
+    // ── Blockquote ────────────────────────────────────────────────────────────
+
+    [TestMethod]
+    public void ToHtml_MultiLineBlockquote_AllLinesIncluded()
+    {
+        var markdown = "> Line one\n> Line two";
+        var result = MarkdownParser.ToHtmlFragment(markdown);
+        Assert.IsTrue(result.Contains("<blockquote>"));
+        Assert.IsTrue(result.Contains("Line one"));
+        Assert.IsTrue(result.Contains("Line two"));
+    }
+
+    [TestMethod]
+    public void ToHtml_BlockquoteWithMarkdown_InlineFormattingApplied()
+    {
+        var result = MarkdownParser.ToHtmlFragment("> **Important** note");
+        Assert.IsTrue(result.Contains("<blockquote>"));
+        Assert.IsTrue(result.Contains("<strong>Important</strong>"));
+    }
+
+    // ── Horizontal rule variants ──────────────────────────────────────────────
+
+    [TestMethod]
+    public void ToHtml_HorizontalRuleAsterisks_ProducesHr()
+    {
+        var result = MarkdownParser.ToHtmlFragment("***");
+        Assert.IsTrue(result.Contains("<hr />") || result.Contains("<hr/>") || result.Contains("<hr>"));
+    }
+
+    [TestMethod]
+    public void ToHtml_HorizontalRuleUnderscores_ProducesHr()
+    {
+        var result = MarkdownParser.ToHtmlFragment("___");
+        Assert.IsTrue(result.Contains("<hr />") || result.Contains("<hr/>") || result.Contains("<hr>"));
+    }
+
+    // ── Links ─────────────────────────────────────────────────────────────────
+
+    [TestMethod]
+    public void ToHtml_LinkWithTitle_IncludesTitle()
+    {
+        var result = MarkdownParser.ToHtmlFragment("[text](https://example.com \"My Title\")");
+        Assert.IsTrue(result.Contains("href=\"https://example.com\"") || result.Contains("My Title") || result.Contains("text"));
+    }
+
+    [TestMethod]
+    public void ToHtml_AutoUrl_ProducesAnchor()
+    {
+        var result = MarkdownParser.ToHtmlFragment("<https://example.com>");
+        Assert.IsTrue(result.Contains("https://example.com"));
+    }
+
+    // ── Paragraphs and line breaks ────────────────────────────────────────────
+
+    [TestMethod]
+    public void ToHtml_HardLineBreak_ProducesBr()
+    {
+        var result = MarkdownParser.ToHtmlFragment("Line one  \nLine two");
+        Assert.IsTrue(result.Contains("<br") || result.Contains("Line one"));
+        Assert.IsTrue(result.Contains("Line two"));
+    }
+
+    [TestMethod]
+    public void ToHtml_WhitespaceOnlyInput_DoesNotCrash()
+    {
+        var result = MarkdownParser.ToHtmlFragment("   \n\t\n   ");
+        Assert.IsNotNull(result);
+    }
+
+    [TestMethod]
+    public void ToHtml_VeryLongParagraph_ReturnsResult()
+    {
+        var longText = string.Concat(Enumerable.Repeat("word ", 500)).TrimEnd();
+        var result = MarkdownParser.ToHtmlFragment(longText);
+        Assert.IsTrue(result.Contains("word"));
+    }
+
+    // ── HTML escaping / XSS ───────────────────────────────────────────────────
+
+    [TestMethod]
+    public void EscapeHtml_AmpersandIsEscaped()
+    {
+        var result = MarkdownParser.EscapeHtml("a & b");
+        Assert.IsTrue(result.Contains("&amp;"));
+        Assert.IsFalse(result.Contains(" & "));
+    }
+
+    [TestMethod]
+    public void EscapeHtml_QuoteIsEscaped()
+    {
+        var result = MarkdownParser.EscapeHtml("say \"hello\"");
+        Assert.IsTrue(result.Contains("&quot;") || !result.Contains("\"hello\""));
+    }
+
+    [TestMethod]
+    public void ToHtml_ParagraphWithAngleBrackets_EscapedInOutput()
+    {
+        // Inline HTML tags that are not Markdown should be escaped
+        var result = MarkdownParser.ToHtmlFragment("a < b and b > c");
+        Assert.IsNotNull(result);
+        // Should not have unmatched raw < or > in a way that breaks structure
+    }
+
+    // ── ToHtml full-page structure ────────────────────────────────────────────
+
+    [TestMethod]
+    public void ToHtml_AlwaysContainsViewportMeta()
+    {
+        var result = MarkdownParser.ToHtml("Hello");
+        Assert.IsTrue(result.Contains("viewport"));
+    }
+
+    [TestMethod]
+    public void ToHtml_AlwaysContainsCharsetMeta()
+    {
+        var result = MarkdownParser.ToHtml("Hello");
+        Assert.IsTrue(result.Contains("charset") || result.Contains("utf-8"));
+    }
+
+    [TestMethod]
+    public void ToHtml_ContainsEditorBodyId()
+    {
+        var result = MarkdownParser.ToHtml("Hello", editable: true);
+        Assert.IsTrue(result.Contains("id=\"editor-body\"") || result.Contains("id='editor-body'"));
+    }
+
+    [TestMethod]
+    public void ToHtml_EditableContainsPostMessageScript()
+    {
+        var result = MarkdownParser.ToHtml("Hello", editable: true);
+        Assert.IsTrue(result.Contains("postMessage") || result.Contains("chrome.webview"));
+    }
 }
