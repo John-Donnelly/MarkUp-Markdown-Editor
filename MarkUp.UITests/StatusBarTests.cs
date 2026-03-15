@@ -96,8 +96,7 @@ public sealed class StatusBarTests : AppSession
     public void TypingOneWord_UpdatesWordCount()
     {
         Editor.Click();
-        SetClipboard("hello");
-        ClickMenu("MenuBarEdit", "MenuPaste");
+        PasteText("hello");
         Thread.Sleep(300);
         var text = Stats.Text;
         Assert.IsTrue(text.Contains("Words: 1"), $"Expected 'Words: 1' but got: '{text}'");
@@ -107,8 +106,7 @@ public sealed class StatusBarTests : AppSession
     public void TypingTwoWords_UpdatesWordCount()
     {
         Editor.Click();
-        SetClipboard("hello world");
-        ClickMenu("MenuBarEdit", "MenuPaste");
+        PasteText("hello world");
         Thread.Sleep(300);
         var text = Stats.Text;
         Assert.IsTrue(text.Contains("Words: 2"), $"Expected 'Words: 2' but got: '{text}'");
@@ -118,8 +116,7 @@ public sealed class StatusBarTests : AppSession
     public void CharacterCount_ReflectsTypedCharacters()
     {
         Editor.Click();
-        SetClipboard("abc");
-        ClickMenu("MenuBarEdit", "MenuPaste");
+        PasteText("abc");
         Thread.Sleep(300);
         var text = Stats.Text;
         Assert.IsTrue(text.Contains("Characters: 3"),
@@ -130,8 +127,7 @@ public sealed class StatusBarTests : AppSession
     public void TypingNewLine_UpdatesLineCount()
     {
         Editor.Click();
-        SetClipboard("first\nsecond");
-        ClickMenu("MenuBarEdit", "MenuPaste");
+        PasteText("first\nsecond");
         Thread.Sleep(300);
         var text = Stats.Text;
         Assert.IsTrue(text.Contains("Lines: 2"), $"Expected 'Lines: 2' but got: '{text}'");
