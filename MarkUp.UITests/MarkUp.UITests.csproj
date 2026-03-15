@@ -7,13 +7,15 @@
     <IsPackable>false</IsPackable>
     <IsTestProject>true</IsTestProject>
     <!--
-      UI tests require WinAppDriver running at http://127.0.0.1:4723
-      and the app installed (sideloaded) on this machine.
+      UI tests require WinAppDriver running on the remote Windows host at
+      http://192.168.0.100:4723 and the app available on that machine.
       See MarkUp.UITests/README.md for setup instructions.
       Run only these tests with: dotnet test -filter "TestCategory=UITest"
     -->
     <PlatformTarget>x64</PlatformTarget>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <RemoteUiAppProject>..\MarkUp Markdown Editor\MarkUp Markdown Editor.csproj</RemoteUiAppProject>
+    <RemoteUiAppPlatform>x64</RemoteUiAppPlatform>
   </PropertyGroup>
 
   <ItemGroup>
@@ -26,5 +28,12 @@
   <ItemGroup>
     <None Include="README.md" />
   </ItemGroup>
+
+  <Target Name="BuildRemoteUiAppPackage" BeforeTargets="Build" Condition="'$(BuildingInsideVisualStudio)' != 'true'">
+    <MSBuild
+      Projects="$(RemoteUiAppProject)"
+      Targets="Build"
+      Properties="Configuration=$(Configuration);Platform=$(RemoteUiAppPlatform);GenerateAppxPackageOnBuild=true;UapAppxPackageBuildMode=SideloadOnly;AppxBundle=Never" />
+  </Target>
 
 </Project>
