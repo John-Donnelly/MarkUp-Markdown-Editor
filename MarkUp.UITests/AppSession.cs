@@ -3,13 +3,18 @@ using OpenQA.Selenium;
 using OpenQA.Selenium.Appium;
 using OpenQA.Selenium.Appium.Windows;
 using System;
+using System.Collections.Generic;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Net.Sockets;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography.X509Certificates;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Threading;
+using OpenQA.Selenium.Interactions;
 
 namespace MarkUp.UITests;
 
@@ -21,26 +26,29 @@ public abstract class AppSession
     private const string AppWindowTitleSuffix = "— MarkUp";
 
     // ── Remote mode ──────────────────────────────────────────────────────────
-    // Set UITEST_DRIVER_URL=http://192.168.0.100:4723 to run tests against MORPHEUS.
+    // UI tests always target the shared remote WinAppDriver host.
     // WinAppDriver must already be running on the remote machine before the test run starts.
 
-    /// <summary>WinAppDriver endpoint on the remote test machine (MORPHEUS).</summary>
+    /// <summary>WinAppDriver endpoint on the remote test machine.</summary>
     private const string RemoteDriverUrl = "http://192.168.0.100:4723";
+    private const string RemoteAppEnvironmentVariable = "UITEST_REMOTE_APP";
+    private const string RemoteAppAumidEnvironmentVariable = "UITEST_REMOTE_AUMID";
+    private const string RemoteAppPathEnvironmentVariable = "UITEST_REMOTE_APP_PATH";
+    private const string RemoteWinRmUsernameEnvironmentVariable = "UITEST_REMOTE_WINRM_USERNAME";
+    private const string RemoteWinRmPasswordEnvironmentVariable = "UITEST_REMOTE_WINRM_PASSWORD";
+    private const string DotEnvFileName = ".env";
+    private const string RemoteAppAumidDefault = "JADApps.MarkUpMarkdownEditor_30vn2v44e6ykm!App";
+    private const string UiTestPackageCertificatePassword = "MarkUpUiTestsCertificate!2026";
 
     /// <summary>
     /// Default path to the app executable AS SEEN BY WinAppDriver on the remote machine.
     /// Override with the <c>UITEST_REMOTE_APP_PATH</c> environment variable when the path differs.
     /// </summary>
     private const string RemoteAppPathDefault =
-        @"C:\Users\John_\source\repos\MarkUp Markdown Editor\MarkUp Markdown Editor\bin\x64\Debug\net8.0-windows10.0.19041.0\win-x64\MarkUp Markdown Editor.exe";
+        @"Z:\repos\MarkUp Markdown Editor\MarkUp Markdown Editor\bin\x64\Debug\net8.0-windows10.0.19041.0\win-x64\MarkUp Markdown Editor.exe";
 
-    /// <summary>Active WinAppDriver URL — local by default, remote when UITEST_DRIVER_URL is set.</summary>
-    private static string DriverUrl =>
-        Environment.GetEnvironmentVariable("UITEST_DRIVER_URL") ?? WinAppDriverUrl;
-
-    /// <summary>True when <see cref="DriverUrl"/> points to a remote machine rather than localhost.</summary>
-    private static bool IsRemoteMode =>
-        !string.Equals(DriverUrl, WinAppDriverUrl, StringComparison.OrdinalIgnoreCase);
+    /// <summary>Active WinAppDriver URL for this workspace.</summary>
+    private static string DriverUrl => RemoteDriverUrl;
 
     // Retry timing for FindById (no IPC during the sleep — purely in-process)
     private const int ElementRetryMs  = 200;
@@ -48,6 +56,7 @@ public abstract class AppSession
 
     private static Process? _winAppDriverProcess;
     private static nint     _appWindowHandle;
+    private static string? _lastSessionInitializationError;
 
     protected static WindowsDriver? Session       { get; private set; }
     protected static WindowsDriver? DesktopSession { get; private set; }
@@ -59,44 +68,7 @@ public abstract class AppSession
 
     internal static void InitialiseSession()
     {
-        if (IsRemoteMode)
-        {
-            InitialiseRemoteSession();
-            return;
-        }
-
-        if (!EnsureWinAppDriverRunning())
-        {
-            Trace.WriteLine("[UITests] WinAppDriver is not available.");
-            return;
-        }
-
-        var aumid = ResolveAumid();
-        if (aumid is null) { Trace.WriteLine("[UITests] App not installed."); return; }
-
-        try
-        {
-            foreach (var stale in Process.GetProcessesByName("MarkUp Markdown Editor"))
-                try { stale.Kill(entireProcessTree: true); } catch { }
-            Thread.Sleep(600);
-
-            _ = ActivateApplication(aumid);
-            nint hwnd = WaitForAppWindow(TimeSpan.FromSeconds(30));
-            _appWindowHandle = hwnd;
-            ShowWindow(hwnd, SW_RESTORE);
-            SetForegroundWindow(hwnd);
-            Thread.Sleep(2000); // Let the app fully render before the first test
-
-            Session = CreateAppSession(hwnd);
-            // 2000 ms implicit wait: long enough for FindFirst to traverse past the WebView2 node
-            // (idle WebView2 UIA traversal takes ~200-1000 ms) to reach elements in Row 3+ of the
-            // main grid (AutomationBridgePanel, FindReplace bar, StatusBar). 500 ms was too short.
-            Session.Manage().Timeouts().ImplicitWait = TimeSpan.FromMilliseconds(2000);
-
-            DesktopSession = CreateDesktopSession();
-            DesktopSession.Manage().Timeouts().ImplicitWait = TimeSpan.FromMilliseconds(500);
-        }
-        catch (Exception ex) { Trace.WriteLine($"[UITests] Could not start session: {ex.Message}"); }
+        InitialiseRemoteSession();
     }
 
     /// <summary>
@@ -107,17 +79,45 @@ public abstract class AppSession
     /// </summary>
     private static void InitialiseRemoteSession()
     {
-        var appPath = Environment.GetEnvironmentVariable("UITEST_REMOTE_APP_PATH") ?? RemoteAppPathDefault;
-        Trace.WriteLine($"[UITests] Remote mode — driver: {DriverUrl}  app: {appPath}");
+        LoadDotEnvVariables(FindSolutionRoot());
+        _lastSessionInitializationError = null;
+        Trace.WriteLine($"[UITests] Remote mode — driver: {DriverUrl}");
+
+        string? installedAumid = null;
+        string? packageInstallError = null;
+
         try
         {
-            Session = CreateRemoteAppSession(appPath);
-            Session.Manage().Timeouts().ImplicitWait = TimeSpan.FromMilliseconds(2000);
-            DesktopSession = CreateRemoteDesktopSession();
-            DesktopSession.Manage().Timeouts().ImplicitWait = TimeSpan.FromMilliseconds(500);
-            WarmUpSessionRoot();
+            installedAumid = TryInstallLatestRemotePackage();
         }
-        catch (Exception ex) { Trace.WriteLine($"[UITests] Could not start remote session: {ex.Message}"); }
+        catch (InvalidOperationException ex)
+        {
+            packageInstallError = $"Could not install the latest remote package: {ex.Message}";
+            Trace.WriteLine($"[UITests] {packageInstallError}");
+        }
+
+        foreach (var appId in GetRemoteAppTargets(installedAumid))
+        {
+            Trace.WriteLine($"[UITests] Trying remote app target: {appId}");
+            try
+            {
+                Session = CreateRemoteAppSession(appId);
+                Session.Manage().Timeouts().ImplicitWait = TimeSpan.FromMilliseconds(2000);
+                DesktopSession = CreateRemoteDesktopSession();
+                DesktopSession.Manage().Timeouts().ImplicitWait = TimeSpan.FromMilliseconds(500);
+                WarmUpSessionRoot();
+                _lastSessionInitializationError = null;
+                return;
+            }
+            catch (WebDriverException ex)
+            {
+                CleanupRemoteSessions();
+                _lastSessionInitializationError = $"Could not start remote session with '{appId}': {ex.Message}";
+                Trace.WriteLine($"[UITests] {_lastSessionInitializationError}");
+            }
+        }
+
+        _lastSessionInitializationError ??= packageInstallError ?? "Could not start remote session because no remote app target is configured.";
     }
 
     internal static void CleanupSession()
@@ -126,6 +126,7 @@ public abstract class AppSession
         Session = null;
         try { DesktopSession?.Quit(); } catch { }
         DesktopSession = null;
+        _lastSessionInitializationError = null;
         try { if (_winAppDriverProcess is { HasExited: false }) _winAppDriverProcess.Kill(entireProcessTree: true); } catch { }
         _winAppDriverProcess = null;
         _appWindowHandle = 0;
@@ -144,27 +145,7 @@ public abstract class AppSession
         try { DesktopSession?.Quit(); } catch { }
         DesktopSession = null;
 
-        if (IsRemoteMode)
-        {
-            InitialiseRemoteSession();
-            return;
-        }
-
-        if (!EnsureWinAppDriverRunning()) return;
-
-        try
-        {
-            _appWindowHandle = WaitForAppWindow(TimeSpan.FromSeconds(15));
-            ShowWindow(_appWindowHandle, SW_RESTORE);
-            SetForegroundWindow(_appWindowHandle);
-            Thread.Sleep(500);
-            Session = CreateAppSession(_appWindowHandle);
-            Session.Manage().Timeouts().ImplicitWait = TimeSpan.FromMilliseconds(2000);
-            DesktopSession = CreateDesktopSession();
-            DesktopSession.Manage().Timeouts().ImplicitWait = TimeSpan.FromMilliseconds(500);
-            WarmUpSessionRoot();
-        }
-        catch (Exception ex) { Trace.WriteLine($"[UITests] ReinitializeSession failed: {ex.Message}"); }
+        InitialiseRemoteSession();
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -186,7 +167,7 @@ public abstract class AppSession
             ReinitializeSession();
 
         if (Session is null)
-            Assert.Inconclusive("WinAppDriver session not available. See MarkUp.UITests\\README.md.");
+            Assert.Inconclusive($"{_lastSessionInitializationError ?? "WinAppDriver session not available."} See MarkUp.UITests\\README.md.");
     }
 
     /// <summary>
@@ -218,6 +199,7 @@ public abstract class AppSession
     /// <summary>Switches to split view (both panels visible). Used by <see cref="ViewWorkflowTests"/>.</summary>
     protected static void EnsureSplitView()
     {
+        if (Session is null) return;
         ClickMenu("MenuBarView", "MenuViewSplit");
         Thread.Sleep(300);
     }
@@ -225,6 +207,7 @@ public abstract class AppSession
     /// <summary>Resets zoom to 100% via menu. Used by <see cref="ViewWorkflowTests"/>.</summary>
     protected static void EnsureZoom100()
     {
+        if (Session is null) return;
         ClickMenu("MenuBarView", "MenuZoomReset");
         Thread.Sleep(150);
     }
@@ -232,6 +215,7 @@ public abstract class AppSession
     /// <summary>Shows the status bar if it was hidden. Used by <see cref="ViewWorkflowTests"/>.</summary>
     protected static void EnsureStatusBarVisible()
     {
+        if (Session is null) return;
         if (IsHidden("StatusBarStats"))
             ClickMenu("MenuBarView", "MenuToggleStatusBar");
     }
@@ -555,171 +539,70 @@ public abstract class AppSession
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    //  Keyboard injection (Win32 keybd_event — no WinAppDriver IPC)
+    //  Keyboard injection (Appium Actions — routes through WinAppDriver to the remote machine)
     // ─────────────────────────────────────────────────────────────────────────
 
-    protected static void SendCtrlShortcut(char key)       => SendModifiedShortcut(VK_CONTROL, ToVirtualKey(key));
-    protected static void SendCtrlShortcut(ushort vk)      => SendModifiedShortcut(VK_CONTROL, vk);
-    protected static void SendCtrlShiftShortcut(char key)  => SendModifiedShortcut(VK_CONTROL, VK_SHIFT, ToVirtualKey(key));
-    protected static void SendCtrlShiftShortcut(ushort vk) => SendModifiedShortcut(VK_CONTROL, VK_SHIFT, vk);
-    protected static void SendAltShortcut(ushort vk)       => SendModifiedShortcut(VK_MENU, vk);
-    /// <summary>
-    /// Sets the system clipboard to <paramref name="text"/> (via Win32 API) and then sends
-    /// Ctrl+V to the focused control. This is layout-independent and triggers WinUI3 TextBox
-    /// <c>TextChanged</c> reliably — unlike <see cref="keybd_event"/> character injection.
-    /// </summary>
+    protected static void SendCtrlShortcut(char key)       => SendRemoteModifiedKeys(Keys.Control, key.ToString().ToLower());
+    protected static void SendCtrlShortcut(ushort vk)      => SendRemoteModifiedKeys(Keys.Control, VkToSeleniumKey(vk));
+    protected static void SendCtrlShiftShortcut(char key)  => SendRemoteModifiedKeys(Keys.Control, Keys.Shift, key.ToString().ToLower());
+    protected static void SendCtrlShiftShortcut(ushort vk) => SendRemoteModifiedKeys(Keys.Control, Keys.Shift, VkToSeleniumKey(vk));
+    protected static void SendAltShortcut(ushort vk)       => SendRemoteModifiedKeys(Keys.Alt, VkToSeleniumKey(vk));
+
+    /// <summary>Types <paramref name="text"/> directly into the editor text box via WinAppDriver.</summary>
     protected static void PasteText(string text)
     {
         ArgumentException.ThrowIfNullOrEmpty(text);
-        SetClipboard(text);
-        Thread.Sleep(30);
-        // Paste into whichever control currently has keyboard focus
-        EnsureAppFocused();
-        SendModifiedShortcut(VK_CONTROL, (ushort)'V');
+        FindById("EditorTextBox").SendKeys(text);
     }
 
-    /// <summary>
-    /// Sets the system clipboard to <paramref name="text"/> via Win32 CF_UNICODETEXT.
-    /// Use before calling <see cref="ClickMenu"/> to paste via the Edit > Paste menu item,
-    /// which reliably triggers <c>UpdateStatusBar</c> regardless of which panel has focus.
-    /// </summary>
-    protected static void SetClipboard(string text)
-    {
-        ArgumentException.ThrowIfNullOrEmpty(text);
-        var bytes = System.Text.Encoding.Unicode.GetBytes(text + '\0');
-        var hGlobal = GlobalAlloc(GMEM_MOVEABLE, (nuint)bytes.Length);
-        var ptr = GlobalLock(hGlobal);
-        Marshal.Copy(bytes, 0, ptr, bytes.Length);
-        GlobalUnlock(hGlobal);
-        OpenClipboard(IntPtr.Zero);
-        EmptyClipboard();
-        SetClipboardData(CF_UNICODETEXT, hGlobal);
-        CloseClipboard();
-    }
+    protected static void SendHashCharacter() => PasteText("#");
 
-    protected static void SendHashCharacter()              => PasteText("#");
     protected static void SendText(string text)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(text);
-        EnsureAppFocused();
-        foreach (var ch in text)
-            SendCharacter(ch);
+        FindById("EditorTextBox").SendKeys(text);
         Thread.Sleep(150);
     }
 
-    protected static void SendCtrlAddShortcut()            => SendModifiedShortcut(VK_CONTROL, VK_ADD);
-    protected static void SendCtrlSubtractShortcut()       => SendModifiedShortcut(VK_CONTROL, VK_SUBTRACT);
-    protected static void SendEscapeKey()                  => SendVirtualKey(VK_ESCAPE);
-    /// <summary>
-    /// Sends Escape to whatever window currently has keyboard focus — no <see cref="SetForegroundWindow"/> call.
-    /// Use to close native file dialogs or WebView2 browser dialogs that already own focus;
-    /// calling <see cref="SendEscapeKey"/> first would steal focus away from the dialog to the app window.
-    /// </summary>
-    protected static void SendEscapeToFocused()
-    {
-        keybd_event((byte)VK_ESCAPE, 0, 0, 0);
-        Thread.Sleep(50);
-        keybd_event((byte)VK_ESCAPE, 0, KEYEVENTF_KEYUP, 0);
-        Thread.Sleep(300);
-    }
-    protected static void SendDeleteKey()                  => SendVirtualKey(VK_DELETE);
-    protected static void SendEnterKey()                   => SendVirtualKey(VK_RETURN);
-    protected static void SendDownKey()                    => SendVirtualKey(VK_DOWN);
-    protected static void SendRightKey()                   => SendVirtualKey(VK_RIGHT);
+    protected static void SendCtrlAddShortcut()      => SendRemoteModifiedKeys(Keys.Control, Keys.Add);
+    protected static void SendCtrlSubtractShortcut() => SendRemoteModifiedKeys(Keys.Control, Keys.Subtract);
+    protected static void SendEscapeKey()            => SendRemoteKey(Keys.Escape);
+    /// <summary>Sends Escape through the active WinAppDriver session (closes dialogs, menus, or find bar).</summary>
+    protected static void SendEscapeToFocused()      => SendRemoteKey(Keys.Escape);
+    protected static void SendDeleteKey()            => SendRemoteKey(Keys.Delete);
+    protected static void SendEnterKey()             => SendRemoteKey(Keys.Return);
+    protected static void SendDownKey()              => SendRemoteKey(Keys.ArrowDown);
+    protected static void SendRightKey()             => SendRemoteKey(Keys.ArrowRight);
 
-    private static void SendModifiedShortcut(params ushort[] virtualKeys)
+    private static void SendRemoteModifiedKeys(params string[] keys)
     {
-        EnsureAppFocused();
-        foreach (var key in virtualKeys[..^1])
-            keybd_event((byte)key, 0, 0, 0);
-        keybd_event((byte)virtualKeys[^1], 0, 0, 0);
-        Thread.Sleep(50);
-        keybd_event((byte)virtualKeys[^1], 0, KEYEVENTF_KEYUP, 0);
-        for (int i = virtualKeys.Length - 2; i >= 0; i--)
-            keybd_event((byte)virtualKeys[i], 0, KEYEVENTF_KEYUP, 0);
+        if (Session is null) return;
+        var actions = new Actions(Session);
+        foreach (var k in keys[..^1]) actions = actions.KeyDown(k);
+        actions = actions.SendKeys(keys[^1]);
+        for (int i = keys.Length - 2; i >= 0; i--) actions = actions.KeyUp(keys[i]);
+        actions.Perform();
         Thread.Sleep(200);
     }
 
-    private static void SendVirtualKey(ushort vk)
+    private static void SendRemoteKey(string key)
     {
-        EnsureAppFocused();
-        keybd_event((byte)vk, 0, 0, 0);
-        Thread.Sleep(50);
-        keybd_event((byte)vk, 0, KEYEVENTF_KEYUP, 0);
+        if (Session is null) return;
+        new Actions(Session).SendKeys(key).Perform();
         Thread.Sleep(150);
     }
 
-    private static void EnsureAppFocused()
+    private static string VkToSeleniumKey(ushort vk) => vk switch
     {
-        // In remote mode _appWindowHandle is always 0 — Win32 keybd_event sends keystrokes to
-        // the local machine and has no effect on the remote session; skip the focus call silently.
-        if (_appWindowHandle == 0) return;
-        SetForegroundWindow(_appWindowHandle);
-        Thread.Sleep(80);
-    }
-
-    private static ushort ToVirtualKey(char key)
-    {
-        var upper = char.ToUpperInvariant(key);
-        if ((upper >= 'A' && upper <= 'Z') || (upper >= '0' && upper <= '9'))
-            return upper;
-        throw new ArgumentOutOfRangeException(nameof(key), key, "Only A-Z and 0-9 shortcut keys are supported.");
-    }
-
-    private static void SendCharacter(char ch)
-    {
-        short key = VkKeyScan(ch);
-        if (key == -1)
-            throw new ArgumentOutOfRangeException(nameof(ch), ch, "Character cannot be translated to a virtual key.");
-
-        byte vk = (byte)(key & 0xFF);
-        byte shiftState = (byte)((key >> 8) & 0xFF);
-
-        if ((shiftState & 1) != 0) keybd_event((byte)VK_SHIFT, 0, 0, 0);
-        if ((shiftState & 2) != 0) keybd_event((byte)VK_CONTROL, 0, 0, 0);
-        if ((shiftState & 4) != 0) keybd_event((byte)VK_MENU, 0, 0, 0);
-
-        keybd_event(vk, 0, 0, 0);
-        Thread.Sleep(30);
-        keybd_event(vk, 0, KEYEVENTF_KEYUP, 0);
-
-        if ((shiftState & 4) != 0) keybd_event((byte)VK_MENU, 0, KEYEVENTF_KEYUP, 0);
-        if ((shiftState & 2) != 0) keybd_event((byte)VK_CONTROL, 0, KEYEVENTF_KEYUP, 0);
-        if ((shiftState & 1) != 0) keybd_event((byte)VK_SHIFT, 0, KEYEVENTF_KEYUP, 0);
-
-        Thread.Sleep(40);
-    }
-
-    private static void SendAltNumpadCode(string digits)
-    {
-        EnsureAppFocused();
-        keybd_event((byte)VK_MENU, 0, 0, 0);
-        foreach (var digit in digits)
-        {
-            byte numpadKey = digit switch
-            {
-                '0' => 0x60,
-                '1' => 0x61,
-                '2' => 0x62,
-                '3' => 0x63,
-                '4' => 0x64,
-                '5' => 0x65,
-                '6' => 0x66,
-                '7' => 0x67,
-                '8' => 0x68,
-                '9' => 0x69,
-                _ => throw new ArgumentOutOfRangeException(nameof(digits), digits, "Alt+numpad digits must be 0-9.")
-            };
-
-            keybd_event(numpadKey, 0, 0, 0);
-            Thread.Sleep(30);
-            keybd_event(numpadKey, 0, KEYEVENTF_KEYUP, 0);
-            Thread.Sleep(30);
-        }
-
-        keybd_event((byte)VK_MENU, 0, KEYEVENTF_KEYUP, 0);
-        Thread.Sleep(100);
-    }
+        VK_ESCAPE    => Keys.Escape,
+        VK_RETURN    => Keys.Return,
+        VK_DELETE    => Keys.Delete,
+        VK_DOWN      => Keys.ArrowDown,
+        VK_RIGHT     => Keys.ArrowRight,
+        VK_ADD       => Keys.Add,
+        VK_SUBTRACT  => Keys.Subtract,
+        _            => throw new ArgumentOutOfRangeException(nameof(vk), vk, "No Selenium key mapping for this virtual key code.")
+    };
 
     // ─────────────────────────────────────────────────────────────────────────
     //  WinAppDriver startup
@@ -813,6 +696,379 @@ public abstract class AppSession
         catch { return null; }
     }
 
+    private static string? TryInstallLatestRemotePackage()
+    {
+        string solutionRoot = FindSolutionRoot();
+        string localPackagePath = FindLatestLocalPackagePath(solutionRoot);
+        EnsureLocalPackageCertificate(localPackagePath, solutionRoot);
+        string localPackageDirectory = Path.GetDirectoryName(localPackagePath)!;
+        string localPackageVersion = ExtractPackageVersion(Path.GetFileNameWithoutExtension(localPackagePath));
+        Trace.WriteLine($"[UITests] Local package: {Path.GetFileName(localPackagePath)} (v{localPackageVersion})");
+
+        return ExecuteRemotePackageInstall(localPackageDirectory, localPackageVersion, TimeSpan.FromMinutes(3));
+    }
+
+    /// <summary>Extracts the four-part version from an MSIX base name, e.g. "MarkUp Markdown Editor_1.4.0.0_x64_Debug" → "1.4.0.0".</summary>
+    private static string ExtractPackageVersion(string msixBaseName)
+    {
+        var m = Regex.Match(msixBaseName, @"_(\d+\.\d+\.\d+\.\d+)_");
+        return m.Success ? m.Groups[1].Value : "0.0.0.0";
+    }
+
+    private static string FindSolutionRoot()
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory is not null)
+        {
+            if (Directory.Exists(Path.Combine(directory.FullName, "MarkUp.UITests"))
+                && Directory.Exists(Path.Combine(directory.FullName, "MarkUp Markdown Editor")))
+            {
+                return directory.FullName;
+            }
+
+            directory = directory.Parent;
+        }
+
+        throw new InvalidOperationException("Could not locate the solution root for the UI test workspace.");
+    }
+
+    private static void LoadDotEnvVariables(string solutionRoot)
+    {
+        string dotEnvPath = Path.Combine(solutionRoot, DotEnvFileName);
+        if (!File.Exists(dotEnvPath)) return;
+
+        foreach (string rawLine in File.ReadAllLines(dotEnvPath))
+        {
+            string line = rawLine.Trim();
+            if (string.IsNullOrWhiteSpace(line) || line.StartsWith('#'))
+                continue;
+
+            int separatorIndex = line.IndexOf('=');
+            if (separatorIndex <= 0)
+                continue;
+
+            string key = line[..separatorIndex].Trim();
+            if (string.IsNullOrWhiteSpace(key) || !string.IsNullOrEmpty(Environment.GetEnvironmentVariable(key)))
+                continue;
+
+            string value = line[(separatorIndex + 1)..].Trim();
+            if (value.Length >= 2)
+            {
+                if ((value[0] == '"' && value[^1] == '"') || (value[0] == '\'' && value[^1] == '\''))
+                    value = value[1..^1];
+            }
+
+            Environment.SetEnvironmentVariable(key, value);
+        }
+    }
+
+    private static string FindLatestLocalPackagePath(string solutionRoot)
+    {
+        string appPackagesDirectory = Path.Combine(solutionRoot, "MarkUp Markdown Editor", "AppPackages");
+        if (!Directory.Exists(appPackagesDirectory))
+            throw new InvalidOperationException($"App package directory '{appPackagesDirectory}' was not found.");
+
+        string dependenciesSegment = $"{Path.DirectorySeparatorChar}Dependencies{Path.DirectorySeparatorChar}";
+        string bundleSegment = $"{Path.DirectorySeparatorChar}Bundle{Path.DirectorySeparatorChar}";
+
+        string? latestPackagePath = Directory
+            .EnumerateFiles(appPackagesDirectory, "*.msix", SearchOption.AllDirectories)
+            .Where(path => path.Contains("_x64", StringComparison.OrdinalIgnoreCase))
+            .Where(path => !path.Contains(dependenciesSegment, StringComparison.OrdinalIgnoreCase))
+            .Where(path => !path.Contains(bundleSegment, StringComparison.OrdinalIgnoreCase))
+            .OrderByDescending(File.GetLastWriteTimeUtc)
+            .FirstOrDefault();
+
+        return latestPackagePath
+            ?? throw new InvalidOperationException($"No x64 app package was found under '{appPackagesDirectory}'.");
+    }
+
+    private static void EnsureLocalPackageCertificate(string localPackagePath, string solutionRoot)
+    {
+        string localCertificatePath = Path.ChangeExtension(localPackagePath, ".cer");
+        if (File.Exists(localCertificatePath))
+            return;
+
+        string certificatePfxPath = FindLocalPackageCertificatePath(solutionRoot);
+
+        using var certificate = new X509Certificate2(
+            certificatePfxPath,
+            UiTestPackageCertificatePassword,
+            X509KeyStorageFlags.Exportable | X509KeyStorageFlags.EphemeralKeySet);
+
+        File.WriteAllBytes(localCertificatePath, certificate.Export(X509ContentType.Cert));
+    }
+
+    private static string FindLocalPackageCertificatePath(string solutionRoot)
+    {
+        string appProjectDirectory = Path.Combine(solutionRoot, "MarkUp Markdown Editor");
+        if (!Directory.Exists(appProjectDirectory))
+            throw new InvalidOperationException($"App project directory '{appProjectDirectory}' was not found.");
+
+        string? certificatePfxPath = Directory
+            .EnumerateFiles(appProjectDirectory, "MarkUpMarkdownEditor.UITests.pfx", SearchOption.AllDirectories)
+            .OrderByDescending(File.GetLastWriteTimeUtc)
+            .FirstOrDefault();
+
+        return certificatePfxPath
+            ?? throw new InvalidOperationException($"No generated package signing certificate was found under '{appProjectDirectory}'.");
+    }
+
+    /// <summary>
+    /// Builds a PowerShell script that deploys the app package to the remote machine.
+    /// Uses <c>New-PSSession</c> + <c>Copy-Item -ToSession</c> to transfer files over WinRM,
+    /// bypassing SMB share access entirely, then installs via a scheduled task under the
+    /// interactive user token (required for AppX PLM initialization).
+    /// Skips the file copy and install entirely when the correct version is already installed.
+    /// </summary>
+    private static string BuildRemotePackageInstallScript(string localPackageDirectory, string localPackageVersion)
+    {
+        // The generated script runs locally (via ExecuteRemotePackageInstall).
+        // It opens a PSSession, then checks if the right version is already installed.
+        // If yes it returns the AUMID immediately. If no it copies the files and installs.
+        return $$"""
+$ErrorActionPreference = 'Stop'
+$computerName = '{{EscapePowerShellSingleQuotedString(new Uri(DriverUrl).Host)}}'
+$username = $env:{{RemoteWinRmUsernameEnvironmentVariable}}
+$password = $env:{{RemoteWinRmPasswordEnvironmentVariable}}
+$localPackageDirectory = '{{EscapePowerShellSingleQuotedString(localPackageDirectory)}}'
+$packageName = '{{AppPackageName}}'
+$localVersion = '{{localPackageVersion}}'
+
+if ([string]::IsNullOrWhiteSpace($username) -or [string]::IsNullOrWhiteSpace($password))
+{
+    throw 'Remote WinRM credentials are required (UITEST_REMOTE_WINRM_USERNAME / UITEST_REMOTE_WINRM_PASSWORD).'
+}
+
+$securePassword = ConvertTo-SecureString $password -AsPlainText -Force
+$credential = [pscredential]::new($username, $securePassword)
+$session = New-PSSession -ComputerName $computerName -Credential $credential -Authentication Negotiate
+
+try
+{
+    # Fast path: check if the correct version is already installed on the remote machine.
+    # If yes, skip the expensive file copy and re-install entirely.
+    $remoteCheck = Invoke-Command -Session $session -ArgumentList $packageName, $localVersion -ScriptBlock {
+        param($pkgName, $version)
+        $pkg = Get-AppxPackage -Name ($pkgName + '*') | Select-Object -First 1
+        if ($null -ne $pkg -and $pkg.Version -eq $version -and $pkg.Status -eq 'Ok')
+        {
+            $pkg.PackageFamilyName
+        }
+        else
+        {
+            ''
+        }
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($remoteCheck))
+    {
+        # Already installed at the correct version — return AUMID immediately.
+        $remoteCheck + '!App'
+    }
+    else
+    {
+        # Slow path: copy files to remote staging and install.
+        $stagingDirectory = 'C:\ProgramData\MarkUpUiTestsPackage'
+        $remotePkgDirName = [IO.Path]::GetFileName($localPackageDirectory)
+        $remotePkgDir = Join-Path $stagingDirectory $remotePkgDirName
+
+        Invoke-Command -Session $session -ArgumentList $stagingDirectory, $remotePkgDir -ScriptBlock {
+            param($staging, $pkgDir)
+            New-Item -Path $staging -ItemType Directory -Force | Out-Null
+            if (Test-Path -LiteralPath $pkgDir) { Remove-Item -LiteralPath $pkgDir -Recurse -Force }
+        }
+
+        # Copy the entire package directory from local machine to remote staging over WinRM
+        Copy-Item -Path $localPackageDirectory -Destination $stagingDirectory -ToSession $session -Recurse -Force
+
+        # Run the install on the remote machine
+        $aumid = Invoke-Command -Session $session -ArgumentList $stagingDirectory, $remotePkgDirName, $packageName, $username -ScriptBlock {
+            param($stagingDirectory, $pkgDirName, $packageName, $winRmUsername)
+            $ErrorActionPreference = 'Stop'
+
+            $localPackageDirectory = Join-Path $stagingDirectory $pkgDirName
+
+            # Resolve local paths
+            $localMsixPath = Get-ChildItem -LiteralPath $localPackageDirectory -Filter '*.msix' -File |
+                Where-Object { $_.Name -notmatch 'Dependencies' } |
+                Select-Object -First 1 -ExpandProperty FullName
+            if (-not $localMsixPath) { throw "No .msix file found in $localPackageDirectory" }
+
+            $localCerFiles = @(Get-ChildItem -LiteralPath $localPackageDirectory -Filter '*.cer' -File | Select-Object -ExpandProperty FullName)
+            $depDir = Join-Path $localPackageDirectory 'Dependencies\x64'
+            $localDepPaths = @()
+            if (Test-Path -LiteralPath $depDir)
+            {
+                $localDepPaths = @(Get-ChildItem -LiteralPath $depDir -Filter '*.msix' -File | Select-Object -ExpandProperty FullName)
+            }
+
+            # Write the install script that the scheduled task will run
+            $installScriptPath = Join-Path $stagingDirectory 'Install-Package.ps1'
+            $exitCodePath = Join-Path $stagingDirectory 'install.exitcode.txt'
+            $logPath = Join-Path $stagingDirectory 'install.log'
+
+            # Build the script content as an array of lines to avoid heredoc escaping issues
+            $scriptLines = @()
+            $scriptLines += '$ErrorActionPreference = ''Stop'''
+            $scriptLines += 'try {'
+            foreach ($cer in $localCerFiles)
+            {
+                $scriptLines += "    certutil.exe -addstore TrustedPeople '$cer' 2>&1 | Out-Null"
+            }
+
+            $depArgs = ''
+            if ($localDepPaths.Count -gt 0)
+            {
+                $depList = ($localDepPaths | ForEach-Object { "'$_'" }) -join ','
+                $depArgs = " -DependencyPath @($depList)"
+            }
+
+            $scriptLines += "    Add-AppxPackage -Path '$localMsixPath'$depArgs -ForceUpdateFromAnyVersion -ForceApplicationShutdown -ErrorAction Stop"
+            $scriptLines += "    Set-Content -LiteralPath '$exitCodePath' -Value '0' -Encoding UTF8 -Force"
+            $scriptLines += '} catch {'
+            $scriptLines += "    `$_ | Out-String | Set-Content -LiteralPath '$logPath' -Encoding UTF8 -Force"
+            $scriptLines += "    Set-Content -LiteralPath '$exitCodePath' -Value '1' -Encoding UTF8 -Force"
+            $scriptLines += '}'
+
+            $scriptLines | Set-Content -LiteralPath $installScriptPath -Encoding UTF8 -Force
+
+            # Clean up previous run artifacts
+            Remove-Item -LiteralPath $exitCodePath -Force -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath $logPath -Force -ErrorAction SilentlyContinue
+
+            # Launch the install script as a scheduled task under the interactive user token
+            $taskName = 'MarkUpUiTestsInstall-' + [Guid]::NewGuid().ToString('N')
+            $taskAction = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument ('-NoLogo -NoProfile -ExecutionPolicy Bypass -File "' + $installScriptPath + '"')
+            $taskPrincipal = New-ScheduledTaskPrincipal -UserId $winRmUsername -LogonType Interactive -RunLevel Highest
+            Register-ScheduledTask -TaskName $taskName -Action $taskAction -Principal $taskPrincipal -Force | Out-Null
+
+            try
+            {
+                Start-ScheduledTask -TaskName $taskName
+                $timeoutAt = (Get-Date).AddMinutes(5)
+                while (-not (Test-Path -LiteralPath $exitCodePath) -and (Get-Date) -lt $timeoutAt)
+                {
+                    Start-Sleep -Seconds 3
+                }
+            }
+            finally
+            {
+                Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue
+            }
+
+            if (-not (Test-Path -LiteralPath $exitCodePath))
+            {
+                throw 'Timed out waiting for package install scheduled task to complete.'
+            }
+
+            $installExitCode = (Get-Content -LiteralPath $exitCodePath -Raw).Trim()
+            if ($installExitCode -ne '0')
+            {
+                $installLog = if (Test-Path -LiteralPath $logPath) { (Get-Content -LiteralPath $logPath -Raw).Trim() } else { '' }
+                if ([string]::IsNullOrWhiteSpace($installLog))
+                {
+                    throw "Package install failed with exit code $installExitCode."
+                }
+                throw $installLog
+            }
+
+            # Verify the package is registered
+            $packageFamilyName = Get-AppxPackage -Name ($packageName + '*') | Select-Object -First 1 -ExpandProperty PackageFamilyName
+            if ([string]::IsNullOrWhiteSpace($packageFamilyName))
+            {
+                throw 'Installed package family name could not be resolved.'
+            }
+
+            $packageFamilyName + '!App'
+        }
+
+        $aumid
+    }
+}
+finally
+{
+    Remove-PSSession -Session $session -ErrorAction SilentlyContinue
+}
+""";
+    }
+
+    private static string ExecuteRemotePackageInstall(string localPackageDirectory, string localPackageVersion, TimeSpan timeout)
+    {
+        string script = BuildRemotePackageInstallScript(localPackageDirectory, localPackageVersion);
+        string encodedScript = Convert.ToBase64String(Encoding.Unicode.GetBytes(script));
+
+        using var ps = new Process
+        {
+            StartInfo = new ProcessStartInfo
+            {
+                FileName = "powershell.exe",
+                Arguments = $"-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand {encodedScript}",
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            }
+        };
+
+        ps.Start();
+        string stdout = ps.StandardOutput.ReadToEnd();
+        string stderr = ps.StandardError.ReadToEnd();
+
+        if (!ps.WaitForExit((int)timeout.TotalMilliseconds))
+        {
+            try { ps.Kill(entireProcessTree: true); } catch { }
+            throw new InvalidOperationException("Timed out waiting for remote package installation to complete.");
+        }
+
+        if (ps.ExitCode != 0)
+        {
+            string error = string.IsNullOrWhiteSpace(stderr) ? stdout.Trim() : stderr.Trim();
+            throw new InvalidOperationException(string.IsNullOrWhiteSpace(error)
+                ? $"Remote package installation failed with exit code {ps.ExitCode}."
+                : error);
+        }
+
+        string? installedAumid = stdout
+            .Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries)
+            .Select(line => line.Trim())
+            .LastOrDefault(line => line.Contains("!App", StringComparison.Ordinal));
+
+        return installedAumid
+            ?? throw new InvalidOperationException("Remote package installation did not return an installed app AUMID.");
+    }
+
+    private static string EscapePowerShellSingleQuotedString(string value)
+        => value.Replace("'", "''", StringComparison.Ordinal);
+
+    private static IReadOnlyList<string> GetRemoteAppTargets(string? installedAumid)
+    {
+        var targets = new List<string>();
+        AddRemoteAppTarget(targets, Environment.GetEnvironmentVariable(RemoteAppEnvironmentVariable));
+        AddRemoteAppTarget(targets, Environment.GetEnvironmentVariable(RemoteAppAumidEnvironmentVariable));
+        AddRemoteAppTarget(targets, installedAumid);
+        AddRemoteAppTarget(targets, ResolveAumid() ?? RemoteAppAumidDefault);
+        AddRemoteAppTarget(targets, Environment.GetEnvironmentVariable(RemoteAppPathEnvironmentVariable));
+        AddRemoteAppTarget(targets, RemoteAppPathDefault);
+        return targets;
+    }
+
+    private static void AddRemoteAppTarget(List<string> targets, string? target)
+    {
+        if (string.IsNullOrWhiteSpace(target)) return;
+        foreach (var existing in targets)
+            if (string.Equals(existing, target, StringComparison.OrdinalIgnoreCase)) return;
+        targets.Add(target);
+    }
+
+    private static void CleanupRemoteSessions()
+    {
+        try { Session?.Quit(); } catch { }
+        Session = null;
+        try { DesktopSession?.Quit(); } catch { }
+        DesktopSession = null;
+    }
+
     private static nint WaitForAppWindow(TimeSpan timeout)
     {
         var sw = Stopwatch.StartNew();
@@ -845,16 +1101,16 @@ public abstract class AppSession
     }
 
     /// <summary>
-    /// Creates a WinAppDriver session on the remote machine, launching the app from <paramref name="appPath"/>
-    /// (the path must be valid on the remote machine, not on this machine).
+    /// Creates a WinAppDriver session on the remote machine using the supplied <c>app</c> capability.
+    /// The value may be a packaged app AUMID or an executable path valid on the remote machine.
     /// </summary>
-    private static WindowsDriver CreateRemoteAppSession(string appPath)
+    private static WindowsDriver CreateRemoteAppSession(string appId)
     {
         var options = new AppiumOptions();
         options.AutomationName = "Windows";
         options.PlatformName   = "Windows";
         options.DeviceName     = "WindowsPC";
-        options.App            = appPath;
+        options.App            = appId;
         return new WindowsDriver(new Uri(DriverUrl), options, TimeSpan.FromSeconds(120));
     }
 
@@ -965,13 +1221,7 @@ public abstract class AppSession
 
     private delegate bool EnumWindowsProc(nint hWnd, nint lParam);
 
-    private const uint   KEYEVENTF_KEYUP  = 0x0002;
-    private const uint   CF_UNICODETEXT   = 13;
-    private const uint   GMEM_MOVEABLE    = 0x0002;
     private const int    SW_RESTORE      = 9;
-    private const ushort VK_CONTROL      = 0x11;
-    private const ushort VK_SHIFT        = 0x10;
-    private const ushort VK_MENU         = 0x12;
     private const ushort VK_ESCAPE       = 0x1B;
     private const ushort VK_RETURN       = 0x0D;
     private const ushort VK_DELETE       = 0x2E;
@@ -986,15 +1236,6 @@ public abstract class AppSession
     [DllImport("user32.dll")] private static extern bool IsWindowVisible(nint hWnd);
     [DllImport("user32.dll")] private static extern bool ShowWindow(nint hWnd, int nCmdShow);
     [DllImport("user32.dll")] private static extern bool SetForegroundWindow(nint hWnd);
-    [DllImport("user32.dll")] private static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, uint dwExtraInfo);
-    [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern short VkKeyScan(char ch);
-    [DllImport("kernel32.dll")] private static extern nint GlobalAlloc(uint uFlags, nuint dwBytes);
-    [DllImport("kernel32.dll")] private static extern nint GlobalLock(nint hMem);
-    [DllImport("kernel32.dll")] private static extern bool GlobalUnlock(nint hMem);
-    [DllImport("user32.dll")] private static extern bool OpenClipboard(nint hWndNewOwner);
-    [DllImport("user32.dll")] private static extern bool EmptyClipboard();
-    [DllImport("user32.dll")] private static extern nint SetClipboardData(uint uFormat, nint hMem);
-    [DllImport("user32.dll")] private static extern bool CloseClipboard();
 
     private static nint FindAppWindowHandle()
     {
