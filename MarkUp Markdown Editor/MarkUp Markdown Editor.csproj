@@ -19,6 +19,13 @@
     <Copyright>© 2026 JAD Apps. All rights reserved.</Copyright>
     <Description>A modern dark-mode Markdown editor and viewer for Windows.</Description>
   </PropertyGroup>
+
+  <PropertyGroup>
+    <UiTestPackageCertificatePath>$(IntermediateOutputPath)UiTestSigning\MarkUpMarkdownEditor.UITests.pfx</UiTestPackageCertificatePath>
+    <UiTestPackageCertificatePassword>MarkUpUiTestsCertificate!2026</UiTestPackageCertificatePassword>
+    <PackageCertificateKeyFile Condition="'$(GenerateAppxPackageOnBuild)'=='true'">$(UiTestPackageCertificatePath)</PackageCertificateKeyFile>
+    <PackageCertificatePassword Condition="'$(GenerateAppxPackageOnBuild)'=='true'">$(UiTestPackageCertificatePassword)</PackageCertificatePassword>
+  </PropertyGroup>
   <ItemGroup>
     <Content Include="Assets\SplashScreen.scale-200.png" />
     <Content Include="Assets\LockScreenLogo.scale-200.png" />
@@ -70,4 +77,17 @@
     <PublishTrimmed Condition="'$(Configuration)' == 'Debug'">False</PublishTrimmed>
     <PublishTrimmed Condition="'$(Configuration)' != 'Debug'">True</PublishTrimmed>
   </PropertyGroup>
+
+  <Target Name="EnsureUiTestPackageCertificate"
+          BeforeTargets="Build"
+          Condition="'$(GenerateAppxPackageOnBuild)'=='true' and !Exists('$(UiTestPackageCertificatePath)')">
+    <MakeDir Directories="$([System.IO.Path]::GetDirectoryName('$(UiTestPackageCertificatePath)'))" />
+    <Exec Command="powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildProjectDirectory)\Create-UiTestPackageCertificate.ps1&quot; -Publisher &quot;CN=2B43AD1A-273D-402E-A9A5-FF23C52C75B9&quot; -PfxPath &quot;$(UiTestPackageCertificatePath)&quot; -Password &quot;$(UiTestPackageCertificatePassword)&quot;" />
+  </Target>
+
+  <Target Name="ExportUiTestPackageCertificate"
+          AfterTargets="_AddWindowsInstallScriptToTestLayout"
+          Condition="'$(GenerateAppxPackageOnBuild)'=='true' and Exists('$(UiTestPackageCertificatePath)') and '$(AppxPackageDir)'!=''">
+    <Exec Command="powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildProjectDirectory)\Export-UiTestPackageCertificate.ps1&quot; -PfxPath &quot;$(UiTestPackageCertificatePath)&quot; -Password &quot;$(UiTestPackageCertificatePassword)&quot; -CerPath &quot;$(AppxPackageDir)\$(AssemblyName).cer&quot;" />
+  </Target>
 </Project>
