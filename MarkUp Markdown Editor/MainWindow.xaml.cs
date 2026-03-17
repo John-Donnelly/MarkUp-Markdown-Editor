@@ -25,6 +25,7 @@ public sealed partial class MainWindow : Window
 {
     private readonly MarkdownDocument _document = new();
     private readonly DispatcherTimer _previewTimer;
+    private readonly DispatcherTimer _editorSyncTimer;  // Syncs _document when text is set via IValueProvider (no TextChanged)
     private bool _suppressTextChanged;
     private bool _suppressPreviewSync;
     private bool _webViewReady;
@@ -37,6 +38,10 @@ public sealed partial class MainWindow : Window
     private string _currentPrintHtml = string.Empty;
     private bool _previewInitialized;
     private bool _isUpdatingPreview;
+
+    // Debounce state for AutomationEditorInput — only process once content is stable for ≥2 ticks (≥300 ms)
+    private string _pendingAutomationInput = string.Empty;
+    private int _pendingAutomationStableCount;
 
     // View modes
     private enum ViewMode { Split, EditorOnly, PreviewOnly }
@@ -59,6 +64,13 @@ public sealed partial class MainWindow : Window
         // Set up debounced preview timer
         _previewTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(300) };
         _previewTimer.Tick += PreviewTimer_Tick;
+
+        // Periodically sync _document.Content from EditorTextBox.Text.  Required because
+        // WinAppDriver's element.SendKeys uses IValueProvider.SetValue on WinUI3 TextBox,
+        // which may not raise TextChanged, leaving _document.Content stale.
+        _editorSyncTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(150) };
+        _editorSyncTimer.Tick += EditorSyncTimer_Tick;
+        _editorSyncTimer.Start();
 
         // Initialize WebView2
         InitializeWebViewAsync();
@@ -279,6 +291,61 @@ public sealed partial class MainWindow : Window
     {
         _previewTimer.Stop();
         UpdatePreview();
+    }
+
+    private void EditorSyncTimer_Tick(object? sender, object e)
+    {
+        if (_suppressTextChanged) return;
+
+        // Apply any pending automation editor input (set by PasteText in UI tests).
+        // Appium Windows driver 5.x uses keyboard simulation (~100ms/char), so characters
+        // arrive one-by-one and the timer may fire before all chars are typed.
+        // We debounce by waiting until the content is stable for ≥2 consecutive ticks (≥300 ms).
+        var automationInput = AutomationEditorInput.Text;
+        if (!string.IsNullOrEmpty(automationInput))
+        {
+            if (automationInput == _pendingAutomationInput)
+            {
+                _pendingAutomationStableCount++;
+            }
+            else
+            {
+                _pendingAutomationInput = automationInput;
+                _pendingAutomationStableCount = 1;
+            }
+
+            if (_pendingAutomationStableCount >= 2)
+            {
+                var rawText = _pendingAutomationInput
+                    .Replace("|HASH|", "#")
+                    .Replace("|NEWLINE|", "\n");
+                _pendingAutomationInput = string.Empty;
+                _pendingAutomationStableCount = 0;
+                AutomationEditorInput.Text = string.Empty;
+                // Allow the full TextChanged cycle to run so WinUI3 commits the value
+                // to UIA (IValueProvider.Value). Suppressing TextChanged here causes
+                // the UIA state to be stale for single-character content, making Appium
+                // read "" instead of the new text on the next tick.
+                EditorTextBox.Text = rawText;
+                EditorTextBox.SelectionStart = EditorTextBox.Text.Length;
+                _document.Content = EditorTextBox.Text;
+                UpdateTitle();
+                UpdateStatusBar();
+                _previewTimer.Stop();
+                _previewTimer.Start();
+            }
+            return;
+        }
+        else
+        {
+            _pendingAutomationInput = string.Empty;
+            _pendingAutomationStableCount = 0;
+        }
+
+        var currentText = EditorTextBox.Text;
+        if (currentText == _document.Content) return;
+        _document.Content = currentText;
+        UpdateStatusBar();
     }
 
     private async void UpdatePreview()
@@ -1083,6 +1150,37 @@ public sealed partial class MainWindow : Window
         await PreviewWebView.CoreWebView2.ExecuteScriptAsync(
             "var body=document.getElementById('editor-body'); if(body){ body.focus(); body.innerHTML='<p><strong>preview bold text</strong></p>'; if(window.notifyChange){ notifyChange(); }}");
         RefreshAutomationState();
+    }
+
+    /// <summary>
+    /// Sets the editor text to the value of <see cref="AutomationEditorInput"/> and updates all
+    /// derived state synchronously.  Called by UI tests via
+    /// <c>AutomationSetEditorContentButton.Click()</c> after writing the desired content to
+    /// <c>AutomationEditorInput</c> with <c>SendKeys</c>.
+    /// <para>
+    /// Because <c>AutomationEditorInput</c> is a single-line TextBox (required so that
+    /// WinAppDriver uses the keyboard-layout-independent <c>IValueProvider.SetValue</c> path),
+    /// newline characters are encoded as the literal token <c>|NEWLINE|</c> by the test helper
+    /// before sending.  This handler decodes them back to <c>\n</c> before applying the content.
+    /// </para>
+    /// </summary>
+    private void AutomationSetEditorContentButton_Click(object sender, RoutedEventArgs e)
+    {
+        // Decode newline placeholders injected by the test-side PasteText helper.
+        var rawText = AutomationEditorInput.Text.Replace("|NEWLINE|", "\n");
+        AutomationEditorInput.Text = string.Empty;
+
+        // Suppress TextChanged so we control exactly when _document is updated.
+        _suppressTextChanged = true;
+        EditorTextBox.Text = rawText;
+        EditorTextBox.SelectionStart = EditorTextBox.Text.Length;
+        _suppressTextChanged = false;
+
+        _document.Content = EditorTextBox.Text;
+        UpdateTitle();
+        UpdateStatusBar();
+        _previewTimer.Stop();
+        _previewTimer.Start();
     }
 
     #endregion
