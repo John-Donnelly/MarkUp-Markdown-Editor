@@ -2,6 +2,49 @@
 
 All notable changes to MarkUp Markdown Editor will be documented in this file.
 
+## [1.4.5] - 2025-06-18
+
+### Added
+- **`AutomationEditorInput` injection bridge**: A hidden single-line `TextBox`
+  (`AutomationEditorInput`) and companion `Button` (`AutomationSetEditorContentButton`)
+  are now present in the automation bridge `Canvas`. UI tests write encoded content to the
+  `TextBox`; the `EditorSyncTimer` debounces the input over ≥2 stable 150 ms ticks
+  (300 ms total), decodes `|NEWLINE|` and `|HASH|` placeholders, and applies the content
+  to `EditorTextBox` in a single assignment. This path is completely independent of
+  keyboard layout and avoids WinUI 3 `TextBox` key-event timing issues.
+
+### Fixed
+- **UK keyboard `#` → `£` garbling in UI tests**: `PasteText()` previously called
+  `SendKeys` directly on `EditorTextBox`, which routes through Appium's keyboard
+  simulation layer and maps `#` to `£` on a UK layout. It now encodes `#` as `|HASH|`
+  and newlines as `|NEWLINE|` and injects the content via `AutomationEditorInput`, so
+  special characters arrive exactly as typed regardless of the remote machine's keyboard
+  layout.
+- **W3C Actions not supported by WinAppDriver**: `SendRemoteModifiedKeys()` previously
+  built a `Selenium.Interactions.Actions` chain (W3C Actions protocol) which WinAppDriver
+  does not implement. Modifier key shortcuts now use chord notation
+  (e.g. `Keys.Control + "a"`) routed through `/element/{id}/value`, which WinAppDriver
+  does support.
+- **Direct `SendKeys` for editor clear in test setup**: `EditorTypingTests` and
+  `StatusBarTests` `TestInitialize` methods now send `Ctrl+A` and `Delete` directly on
+  the cached `Editor` element rather than through the shared `SendCtrlShortcut` /
+  `SendDeleteKey` helpers, eliminating a focus-race that caused the wrong element to
+  receive the keystrokes.
+- **Silent remote session failure when running a single test**: `InitialiseRemoteSession`
+  now performs a TCP connectivity check against the remote WinAppDriver endpoint before
+  attempting package deployment or session creation. An unreachable host is diagnosed
+  immediately with a clear message rather than cycling silently through all AUMID fallback
+  targets.
+- **App not appearing on remote screen after session creation**: `WarmUpSessionRoot()`
+  now returns `bool` and the initialization loop throws `WebDriverException` if
+  `EditorTextBox` does not appear within 30 seconds (previously 15 s, silent return on
+  timeout). This ensures WinAppDriver session creation only succeeds when the app window
+  is genuinely ready on the remote machine.
+- **Stale session not reinitialized for single-test runs**: `SkipIfNoSession()` now
+  triggers reinitialization when the existing session is non-null but unresponsive (e.g.
+  after a previous test run closed the app), ensuring the full deployment and launch
+  pipeline runs for every test regardless of how many tests are selected.
+
 ## [1.4.0] - 2025-06-17
 
 ### Added

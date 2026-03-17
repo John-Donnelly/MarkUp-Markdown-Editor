@@ -11,7 +11,7 @@
   <Identity
     Name="JADApps.MarkUpMarkdownEditor"
     Publisher="CN=2B43AD1A-273D-402E-A9A5-FF23C52C75B9"
-    Version="1.4.0.0" />
+    Version="1.4.5.0" />
 
   <mp:PhoneIdentity PhoneProductId="093e4ec2-0866-45b3-809a-02f3cd82fc3a" PhonePublisherId="00000000-0000-0000-0000-000000000000"/>
 
