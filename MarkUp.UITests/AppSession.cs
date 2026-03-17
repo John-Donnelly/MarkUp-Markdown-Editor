@@ -14,7 +14,6 @@ using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
-using OpenQA.Selenium.Interactions;
 
 namespace MarkUp.UITests;
 
@@ -83,6 +82,15 @@ public abstract class AppSession
         _lastSessionInitializationError = null;
         Trace.WriteLine($"[UITests] Remote mode — driver: {DriverUrl}");
 
+        if (!IsRemoteDriverListening())
+        {
+            _lastSessionInitializationError =
+                $"Remote WinAppDriver endpoint {DriverUrl} is not reachable. " +
+                $"Run MarkUp.UITests\\Setup-RemoteUiTestHost.ps1 on the remote machine before running tests.";
+            Trace.WriteLine($"[UITests] {_lastSessionInitializationError}");
+            return;
+        }
+
         string? installedAumid = null;
         string? packageInstallError = null;
 
@@ -105,7 +113,11 @@ public abstract class AppSession
                 Session.Manage().Timeouts().ImplicitWait = TimeSpan.FromMilliseconds(2000);
                 DesktopSession = CreateRemoteDesktopSession();
                 DesktopSession.Manage().Timeouts().ImplicitWait = TimeSpan.FromMilliseconds(500);
-                WarmUpSessionRoot();
+                if (!WarmUpSessionRoot())
+                    throw new WebDriverException(
+                        $"App editor 'EditorTextBox' did not appear on the remote machine within 30 seconds " +
+                        $"after launching '{appId}'. The app may not have started correctly.");
+                try { Session?.Manage().Window.Maximize(); Thread.Sleep(500); } catch { }
                 _lastSessionInitializationError = null;
                 return;
             }
@@ -146,6 +158,7 @@ public abstract class AppSession
         DesktopSession = null;
 
         InitialiseRemoteSession();
+        try { Session?.Manage().Window.Maximize(); Thread.Sleep(300); } catch { }
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -163,7 +176,7 @@ public abstract class AppSession
 
     protected static void SkipIfNoSession()
     {
-        if (Session is null)
+        if (Session is null || !IsSessionResponsive())
             ReinitializeSession();
 
         if (Session is null)
@@ -190,16 +203,18 @@ public abstract class AppSession
 
         editor.Click();
         Thread.Sleep(100);
-        SendCtrlShortcut('A');
+        editor.SendKeys(Keys.Control + "a");  // Direct to editor — avoids SwitchTo().ActiveElement() focus race
         Thread.Sleep(100);
-        SendDeleteKey();
+        editor.SendKeys(Keys.Delete);
         Thread.Sleep(200);
     }
 
-    /// <summary>Switches to split view (both panels visible). Used by <see cref="ViewWorkflowTests"/>.</summary>
+    /// <summary>Switches to split view
     protected static void EnsureSplitView()
     {
         if (Session is null) return;
+        try { TryFindById("EditorTextBox")?.Click(); } catch { }  // Dismiss any open flyout before clicking menu
+        Thread.Sleep(100);
         ClickMenu("MenuBarView", "MenuViewSplit");
         Thread.Sleep(300);
     }
@@ -208,6 +223,8 @@ public abstract class AppSession
     protected static void EnsureZoom100()
     {
         if (Session is null) return;
+        try { TryFindById("EditorTextBox")?.Click(); } catch { }  // Dismiss any open flyout before clicking menu
+        Thread.Sleep(100);
         ClickMenu("MenuBarView", "MenuZoomReset");
         Thread.Sleep(150);
     }
@@ -239,6 +256,8 @@ public abstract class AppSession
         try { SendEscapeKey(); } catch { }  // Close submenu / ContentDialog
         Thread.Sleep(150);
         try { SendEscapeKey(); } catch { }  // Close parent menu (harmless if nothing open)
+        Thread.Sleep(100);
+        try { TryFindById("EditorTextBox")?.Click(); } catch { }  // Dismiss any remaining WinUI3 flyout
         Thread.Sleep(100);
     }
 
@@ -414,23 +433,30 @@ public abstract class AppSession
         }
     }
 
-    private static void WarmUpSessionRoot()
+    /// <summary>
+    /// Polls for <c>EditorTextBox</c> in the remote session's UIA tree for up to 30 seconds.
+    /// Returns <c>true</c> when the element is found (app is ready), <c>false</c> on timeout
+    /// (app did not appear on the remote machine within the expected window).
+    /// </summary>
+    private static bool WarmUpSessionRoot()
     {
-        if (Session is null) return;
+        if (Session is null) return false;
 
         var sw = Stopwatch.StartNew();
-        while (sw.Elapsed < TimeSpan.FromSeconds(15))
+        while (sw.Elapsed < TimeSpan.FromSeconds(30))
         {
             try
             {
                 var editor = Session.FindElement(MobileBy.AccessibilityId("EditorTextBox"));
                 if (editor is not null)
-                    return;
+                    return true;
             }
             catch { }
 
             Thread.Sleep(250);
         }
+
+        return false;
     }
 
     protected static bool IsDisplayed(string automationId) =>
@@ -548,11 +574,46 @@ public abstract class AppSession
     protected static void SendCtrlShiftShortcut(ushort vk) => SendRemoteModifiedKeys(Keys.Control, Keys.Shift, VkToSeleniumKey(vk));
     protected static void SendAltShortcut(ushort vk)       => SendRemoteModifiedKeys(Keys.Alt, VkToSeleniumKey(vk));
 
-    /// <summary>Types <paramref name="text"/> directly into the editor text box via WinAppDriver.</summary>
+    /// <summary>
+    /// Injects <paramref name="text"/> into the editor via the <c>AutomationEditorInput</c>
+    /// automation path.
+    /// <para>
+    /// Appium Windows driver 5.x uses keyboard simulation (~100 ms/char), not
+    /// <c>IValueProvider.SetValue</c>.  This means <c>#</c> maps to <c>£</c> on a UK keyboard
+    /// layout.  Newlines and <c>#</c> are therefore encoded as safe ASCII placeholders
+    /// (<c>|NEWLINE|</c> and <c>|HASH|</c>) before sending; the <c>EditorSyncTimer</c> decodes
+    /// them back and applies the content to <c>EditorTextBox</c> once the content is stable for
+    /// ≥2 consecutive 150 ms ticks (debounce = 300 ms).
+    /// </para>
+    /// </summary>
     protected static void PasteText(string text)
     {
         ArgumentException.ThrowIfNullOrEmpty(text);
-        FindById("EditorTextBox").SendKeys(text);
+        // Encode newlines and # as safe placeholders before injecting into the single-line input TextBox.
+        var encoded = text.Replace("\r\n", "|NEWLINE|").Replace("\n", "|NEWLINE|").Replace("#", "|HASH|");
+        var input = FindById("AutomationEditorInput");
+        input.SendKeys(encoded);
+        // Phase 1: wait for at least the first character to arrive in the TextBox.
+        // Appium dispatches key events faster than WinUI3 processes them, so the TextBox may still be
+        // empty immediately after SendKeys returns.  Polling without this guard would exit prematurely.
+        var sw = Stopwatch.StartNew();
+        while (sw.Elapsed.TotalMilliseconds < 3000)
+        {
+            Thread.Sleep(50);
+            try { if (!string.IsNullOrEmpty(input.Text)) break; }
+            catch { break; }
+        }
+        // Phase 2: wait until the EditorSyncTimer debounce clears the input (content is stable for
+        // ≥2 ticks = ≥300ms, timer has set EditorTextBox.Text and cleared AutomationEditorInput).
+        sw.Restart();
+        while (sw.Elapsed.TotalMilliseconds < 3000)
+        {
+            Thread.Sleep(100);
+            try { if (string.IsNullOrEmpty(input.Text)) break; }
+            catch { break; }
+        }
+        // Small margin for UIA value propagation after EditorTextBox.Text is set programmatically.
+        Thread.Sleep(200);
     }
 
     protected static void SendHashCharacter() => PasteText("#");
@@ -577,19 +638,28 @@ public abstract class AppSession
     private static void SendRemoteModifiedKeys(params string[] keys)
     {
         if (Session is null) return;
-        var actions = new Actions(Session);
-        foreach (var k in keys[..^1]) actions = actions.KeyDown(k);
-        actions = actions.SendKeys(keys[^1]);
-        for (int i = keys.Length - 2; i >= 0; i--) actions = actions.KeyUp(keys[i]);
-        actions.Perform();
+        // Chord notation (e.g. Keys.Control + "a") routes through /element/{id}/value,
+        // which WinAppDriver supports. The W3C Actions keyboard input-source is NOT supported.
+        var chord = string.Concat(keys);
+        SendKeysViaElement(chord);
         Thread.Sleep(200);
     }
 
     private static void SendRemoteKey(string key)
     {
         if (Session is null) return;
-        new Actions(Session).SendKeys(key).Perform();
+        SendKeysViaElement(key);
         Thread.Sleep(150);
+    }
+
+    /// <summary>Sends keys to the currently focused element, falling back to the editor text box.</summary>
+    private static void SendKeysViaElement(string keys)
+    {
+        if (Session is null) return;
+        IWebElement? target = null;
+        try { target = Session.SwitchTo().ActiveElement(); } catch { }
+        target ??= TryFindById("EditorTextBox");
+        target?.SendKeys(keys);
     }
 
     private static string VkToSeleniumKey(ushort vk) => vk switch
@@ -665,6 +735,22 @@ public abstract class AppSession
         {
             using var client = new TcpClient();
             return client.ConnectAsync("127.0.0.1", 4723).Wait(1000) && client.Connected;
+        }
+        catch { return false; }
+    }
+
+    /// <summary>
+    /// Checks that the remote WinAppDriver endpoint is reachable via TCP.
+    /// Called before any deployment or session creation so that a missing remote host
+    /// is diagnosed immediately rather than silently failing through all app-target fallbacks.
+    /// </summary>
+    private static bool IsRemoteDriverListening()
+    {
+        var uri = new Uri(DriverUrl);
+        try
+        {
+            using var client = new TcpClient();
+            return client.ConnectAsync(uri.Host, uri.Port).Wait(3000) && client.Connected;
         }
         catch { return false; }
     }

@@ -39,9 +39,9 @@ public sealed class EditorTypingTests : AppSession
             var editor = Editor;
             editor.Click();
             Thread.Sleep(100);
-            SendCtrlShortcut('A');
+            editor.SendKeys(Keys.Control + "a");  // Direct to editor element
             Thread.Sleep(100);
-            SendDeleteKey();
+            editor.SendKeys(Keys.Delete);
             Thread.Sleep(200);
         }
         catch (NoSuchWindowException)
@@ -50,9 +50,9 @@ public sealed class EditorTypingTests : AppSession
             var editor = Editor;
             editor.Click();
             Thread.Sleep(100);
-            SendCtrlShortcut('A');
+            editor.SendKeys(Keys.Control + "a");
             Thread.Sleep(100);
-            SendDeleteKey();
+            editor.SendKeys(Keys.Delete);
             Thread.Sleep(200);
         }
     }
@@ -98,9 +98,20 @@ public sealed class EditorTypingTests : AppSession
     public void HashCharacter_TypesLiterallyWithoutHanging()
     {
         Editor.Click();
-        Editor.SendKeys("#");
-        Thread.Sleep(100);
-        Assert.IsTrue(Editor.Text.Contains("#"), "Hash should appear literally in editor.");
+        PasteText("#");
+        // Poll until "#" is visible to Appium (up to 3 s). Use a fresh element lookup each
+        // iteration to bypass any Appium-side element cache.
+        var found = false;
+        string? lastSeen = null;
+        string? lastDoc = null;
+        for (var i = 0; i < 30 && !found; i++)
+        {
+            Thread.Sleep(100);
+            lastSeen = TryFindById("EditorTextBox")?.Text;
+            lastDoc  = TryFindById("AutomationDocumentContent")?.Text;
+            found = lastSeen?.Contains("#") == true;
+        }
+        Assert.IsTrue(found, $"Hash should appear literally in editor. EditorTextBox='{lastSeen}' AutomationDocumentContent='{lastDoc}'");
     }
 
     [TestMethod]

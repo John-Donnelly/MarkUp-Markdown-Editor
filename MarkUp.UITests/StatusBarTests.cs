@@ -51,9 +51,9 @@ public sealed class StatusBarTests : AppSession
             Thread.Sleep(100);
             Editor.Click();
             Thread.Sleep(100);
-            SendCtrlShortcut('A');
+            Editor.SendKeys(Keys.Control + "a");  // Direct to editor element
             Thread.Sleep(100);
-            SendDeleteKey();
+            Editor.SendKeys(Keys.Delete);
             Thread.Sleep(200);
         }
         catch (NoSuchWindowException)
@@ -61,9 +61,9 @@ public sealed class StatusBarTests : AppSession
             ReinitializeSession();
             Editor.Click();
             Thread.Sleep(100);
-            SendCtrlShortcut('A');
+            Editor.SendKeys(Keys.Control + "a");
             Thread.Sleep(100);
-            SendDeleteKey();
+            Editor.SendKeys(Keys.Delete);
             Thread.Sleep(200);
         }
     }
