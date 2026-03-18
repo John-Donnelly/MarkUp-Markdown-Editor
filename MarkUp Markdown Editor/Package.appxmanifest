@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 
 <Package
   xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
@@ -11,7 +11,7 @@
   <Identity
     Name="JADApps.MarkUpMarkdownEditor"
     Publisher="CN=2B43AD1A-273D-402E-A9A5-FF23C52C75B9"
-    Version="1.4.5.0" />
+    Version="1.5.0.0" />
 
   <mp:PhoneIdentity PhoneProductId="093e4ec2-0866-45b3-809a-02f3cd82fc3a" PhonePublisherId="00000000-0000-0000-0000-000000000000"/>
 
@@ -44,6 +44,19 @@
         <uap:InitialRotationPreference>
           <uap:Rotation Preference="landscape"/></uap:InitialRotationPreference>
       </uap:VisualElements>
+      <Extensions>
+        <uap:Extension Category="windows.fileTypeAssociation">
+          <uap:FileTypeAssociation Name="markdown">
+            <uap:DisplayName>Markdown File</uap:DisplayName>
+            <uap:Logo>Assets\Square44x44Logo.png</uap:Logo>
+            <uap:InfoTip>Open with MarkUp Markdown Editor</uap:InfoTip>
+            <uap:SupportedFileTypes>
+              <uap:FileType>.md</uap:FileType>
+              <uap:FileType>.markdown</uap:FileType>
+            </uap:SupportedFileTypes>
+          </uap:FileTypeAssociation>
+        </uap:Extension>
+      </Extensions>
     </Application>
   </Applications>
 
