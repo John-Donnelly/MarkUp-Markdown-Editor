@@ -92,9 +92,15 @@ public static partial class MarkdownParser
                     var headingText = ProcessInline(line[(level + 1)..].Trim());
                     var id = GenerateSlug(line[(level + 1)..].Trim());
                     sb.AppendLine($"<h{level} id=\"{id}\">{headingText}</h{level}>");
-                    i++;
-                    continue;
                 }
+                else
+                {
+                    // '#' without a trailing space (e.g. bare '#', '##', '#NoSpace') is not a
+                    // valid ATX heading.  Emit as a paragraph so the outer loop always advances.
+                    sb.AppendLine($"<p>{ProcessInline(line)}</p>");
+                }
+                i++;
+                continue;
             }
 
             // Blockquote
@@ -378,59 +384,30 @@ public static partial class MarkdownParser
         var blockquoteBg = darkMode ? "#252525" : "#f9f9f9";
         var toolbarBg = darkMode ? "#252525" : "#f0f0f0";
         var toolbarBorder = darkMode ? "#404040" : "#ccc";
-        var toolbarBtnHover = darkMode ? "#3a3a3a" : "#ddd";
 
         var editableAttr = editable ? " contenteditable=\"true\"" : string.Empty;
 
-        var toolbarHtml = editable ? $@"
-<div id=""wysiwyg-toolbar"" style=""position:sticky;top:0;z-index:100;background:{toolbarBg};border-bottom:1px solid {toolbarBorder};padding:4px 8px;display:flex;gap:2px;flex-wrap:wrap;"">
-  <button onclick=""fmt('bold')"" title=""Bold"" style=""font-weight:bold"">B</button>
-  <button onclick=""fmt('italic')"" title=""Italic"" style=""font-style:italic"">I</button>
-  <button onclick=""fmt('strikeThrough')"" title=""Strikethrough"" style=""text-decoration:line-through"">S</button>
-  <span style=""width:1px;background:{toolbarBorder};margin:2px 4px""></span>
-  <button onclick=""fmtBlock('h1')"" title=""Heading 1"">H1</button>
-  <button onclick=""fmtBlock('h2')"" title=""Heading 2"">H2</button>
-  <button onclick=""fmtBlock('h3')"" title=""Heading 3"">H3</button>
-  <span style=""width:1px;background:{toolbarBorder};margin:2px 4px""></span>
-  <button onclick=""fmt('insertUnorderedList')"" title=""Bullet List"">• List</button>
-  <button onclick=""fmt('insertOrderedList')"" title=""Numbered List"">1. List</button>
-  <span style=""width:1px;background:{toolbarBorder};margin:2px 4px""></span>
-  <button onclick=""insertCode()"" title=""Inline Code"">&lt;/&gt;</button>
-  <button onclick=""insertLink()"" title=""Insert Link"">🔗</button>
-  <button onclick=""insertHR()"" title=""Horizontal Rule"">—</button>
-  <button onclick=""fmtBlock('blockquote')"" title=""Blockquote"">&gt;</button>
-</div>" : string.Empty;
-
-        var toolbarCss = editable ? $@"
-  #wysiwyg-toolbar button {{
-    background: {toolbarBg};
-    color: {fg};
-    border: 1px solid {toolbarBorder};
-    border-radius: 4px;
-    padding: 4px 8px;
-    cursor: pointer;
-    font-size: 12px;
-    min-width: 28px;
-    line-height: 1.2;
-  }}
-  #wysiwyg-toolbar button:hover {{
-    background: {toolbarBtnHover};
-  }}
-  [contenteditable]:focus {{
+        var toolbarCss = editable ? @"
+  [contenteditable]:focus {
     outline: none;
-  }}" : string.Empty;
+  }
+  ::highlight(sync-highlight) {
+    background-color: rgba(0, 120, 215, 0.3);
+    color: inherit;
+  }" : string.Empty;
 
         var editScript = editable ? @"
 <script>
   var _suppressNotify = false;
   var debounceTimer;
+  var selectionDebounce;
+  var highlightAF;
 
-  // Called by C# host to update content without triggering a round-trip sync
+  // Called by C# host to update content without triggering a round-trip sync.
   function updateContent(html) {
     _suppressNotify = true;
     var body = document.getElementById('editor-body');
     if (body) { body.innerHTML = html; }
-    // Re-enable notifications after the DOM settles
     setTimeout(function() { _suppressNotify = false; }, 50);
   }
 
@@ -443,33 +420,93 @@ public static partial class MarkdownParser
     }, 400);
   }
 
-  function fmt(cmd, val) { document.execCommand(cmd, false, val || null); notifyChange(); }
-  function fmtBlock(tag) {
-    document.execCommand('formatBlock', false, '<' + tag + '>');
-    notifyChange();
-  }
-  function insertCode() {
-    var sel = window.getSelection();
-    if (sel.rangeCount > 0) {
-      var range = sel.getRangeAt(0);
-      var code = document.createElement('code');
-      range.surroundContents(code);
-      notifyChange();
+  // Called by C# host to highlight plain text in the preview that mirrors the editor selection.
+  function highlightText(text) {
+    if (typeof CSS !== 'undefined' && CSS.highlights) {
+      CSS.highlights.delete('sync-highlight');
+    }
+    if (!text || text.length === 0) return;
+    var body = document.getElementById('editor-body');
+    if (!body) return;
+    var textNodes = [];
+    var walker = document.createTreeWalker(body, NodeFilter.SHOW_TEXT, null);
+    while (walker.nextNode()) { textNodes.push(walker.currentNode); }
+    var fullText = '';
+    var nodeOffsets = [];
+    for (var i = 0; i < textNodes.length; i++) {
+      nodeOffsets.push(fullText.length);
+      fullText += textNodes[i].textContent;
+    }
+    var startIdx = fullText.indexOf(text);
+    if (startIdx < 0) return;
+    var endIdx = startIdx + text.length;
+    var startNode = null, startOffset = 0, endNode = null, endOffset = 0;
+    for (var i = 0; i < textNodes.length; i++) {
+      var ns = nodeOffsets[i];
+      var ne = ns + textNodes[i].textContent.length;
+      if (startNode === null && startIdx >= ns && startIdx <= ne) {
+        startNode = textNodes[i]; startOffset = startIdx - ns;
+      }
+      if (endNode === null && endIdx >= ns && endIdx <= ne) {
+        endNode = textNodes[i]; endOffset = endIdx - ns; break;
+      }
+    }
+    if (startNode && endNode && typeof CSS !== 'undefined' && CSS.highlights) {
+      try {
+        var range = new Range();
+        range.setStart(startNode, startOffset);
+        range.setEnd(endNode, endOffset);
+        CSS.highlights.set('sync-highlight', new Highlight(range));
+      } catch(e) {}
     }
   }
-  function insertLink() {
-    var url = prompt('Enter URL:', 'https://');
-    if (url) { fmt('createLink', url); }
-  }
-  function insertHR() {
-    fmt('insertHorizontalRule');
-  }
+
   document.addEventListener('DOMContentLoaded', function() {
     var body = document.getElementById('editor-body');
     if (body) {
       body.addEventListener('input', notifyChange);
       body.addEventListener('paste', function(e) { setTimeout(notifyChange, 100); });
     }
+    // Mirror the selection in the preview via CSS Custom Highlight immediately so
+    // the highlight persists even after the WebView2 loses focus (the browser's
+    // native DOM selection fades on blur; ::highlight(sync-highlight) does not).
+    document.addEventListener('selectionchange', function() {
+      if (highlightAF) cancelAnimationFrame(highlightAF);
+      highlightAF = requestAnimationFrame(function() {
+        var sel = window.getSelection();
+        if (sel && !sel.isCollapsed && sel.rangeCount > 0) {
+          highlightText(sel.toString());
+        } else {
+          highlightText('');
+        }
+      });
+      // Notify the C# host so it can mirror the selection in the editor pane.
+      // Only send the message while the WebView2 has focus; if the user has already
+      // moved to the editor the stale preview selection must not override their
+      // current editor selection.
+      clearTimeout(selectionDebounce);
+      selectionDebounce = setTimeout(function() {
+        if (!document.hasFocus()) return;
+        var s = window.getSelection();
+        if (!s || s.isCollapsed || s.rangeCount === 0) return;
+        var t = s.toString();
+        if (t && t.length > 0) {
+          window.chrome.webview.postMessage(JSON.stringify({ type: 'selectionChanged', text: t }));
+        }
+      }, 200);
+    });
+    // Send selection on pointerup immediately — document.hasFocus() can be unreliable
+    // in WinUI 3 after the 200ms debounce delay, so handle pointer-based selections
+    // eagerly at the moment the user releases the pointer.
+    document.addEventListener('pointerup', function() {
+      clearTimeout(selectionDebounce);
+      var s = window.getSelection();
+      if (!s || s.isCollapsed || s.rangeCount === 0) return;
+      var t = s.toString();
+      if (t && t.length > 0) {
+        window.chrome.webview.postMessage(JSON.stringify({ type: 'selectionChanged', text: t }));
+      }
+    });
   });
   document.addEventListener('click', function(e) {
     var link = e.target.closest('a');
@@ -489,8 +526,8 @@ public static partial class MarkdownParser
       e.preventDefault();
     }
   });
-</script>" : @"
-<script>
+</script>"
+ : @"<script>
   document.addEventListener('click', function(e) {
     var link = e.target.closest('a');
     if (!link) return;
@@ -617,8 +654,7 @@ public static partial class MarkdownParser
   strong {{ font-weight: 700; }}
   {toolbarCss}
   @media print {{
-    #wysiwyg-toolbar {{ display: none !important; }}
-    body {{ background-color: #fff !important; color: #000 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }}
+    body {{ background-color: #fff !important;
     #editor-body {{ padding: 0 !important; max-width: 100% !important; }}
     h1, h2, h3, h4, h5, h6 {{ color: #000 !important; }}
     h1 {{ border-bottom-color: #ccc !important; }}
@@ -643,7 +679,6 @@ public static partial class MarkdownParser
 </style>
 </head>
 <body>
-{toolbarHtml}
 <div id=""editor-body""{editableAttr}>
 {bodyHtml}
 </div>

@@ -261,10 +261,12 @@ public class MarkdownParserTests
     }
 
     [TestMethod]
-    public void ToHtml_Editable_ContainsWysiwygToolbar()
+    public void ToHtml_Editable_DoesNotContainWysiwygToolbar()
     {
+        // The embedded WYSIWYG toolbar has been removed; the WinUI main toolbar handles formatting.
         var result = MarkdownParser.ToHtml("Hello", darkMode: true, editable: true);
-        Assert.IsTrue(result.Contains("wysiwyg-toolbar"));
+        Assert.IsFalse(result.Contains("wysiwyg-toolbar"));
+        Assert.IsFalse(result.Contains("fmt('bold')"));
     }
 
     [TestMethod]
@@ -300,11 +302,13 @@ public class MarkdownParserTests
     }
 
     [TestMethod]
-    public void ToHtml_PrintMediaRules_HideToolbar()
+    public void ToHtml_PrintMediaRules_ContainPrintStyles()
     {
+        // Verify that the print @media block still hides any fixed-position elements.
+        // The wysiwyg-toolbar was removed, so its hide rule is no longer expected.
         var result = MarkdownParser.ToHtml("Hello", darkMode: true, editable: true);
-        Assert.IsTrue(result.Contains("#wysiwyg-toolbar"));
-        Assert.IsTrue(result.Contains("display: none"));
+        Assert.IsTrue(result.Contains("@media print"));
+        Assert.IsFalse(result.Contains("wysiwyg-toolbar"));
     }
 
     [TestMethod]
@@ -667,5 +671,123 @@ public class MarkdownParserTests
     {
         var result = MarkdownParser.ToHtml("Hello", editable: true);
         Assert.IsTrue(result.Contains("postMessage") || result.Contains("chrome.webview"));
+    }
+
+    // -----------------------------------------------------------------------
+    // Bug fix: bare '#' (and variants without a trailing space) caused an
+    // infinite loop in ConvertBody because the heading handler did not
+    // consume the line and the paragraph handler also skipped it.
+    // -----------------------------------------------------------------------
+
+    [TestMethod]
+    public void ToHtmlFragment_BareHash_DoesNotHangAndProducesParagraph()
+    {
+        // A single '#' with no trailing space is not a valid heading.
+        // The parser must terminate without hanging and emit some output.
+        var result = MarkdownParser.ToHtmlFragment("#");
+        Assert.IsFalse(string.IsNullOrEmpty(result));
+        // Should be rendered as a paragraph (not a heading)
+        Assert.IsFalse(result.Contains("<h1") || result.Contains("<h2") || result.Contains("<h3"));
+    }
+
+    [TestMethod]
+    public void ToHtmlFragment_MultipleHashesNoSpace_DoesNotHang()
+    {
+        var result = MarkdownParser.ToHtmlFragment("##");
+        Assert.IsFalse(string.IsNullOrEmpty(result));
+        Assert.IsFalse(result.Contains("<h1") || result.Contains("<h2") || result.Contains("<h3"));
+    }
+
+    [TestMethod]
+    public void ToHtmlFragment_HashWithTextNoSpace_RendersAsParagraph()
+    {
+        // '#Hello' (no space between # and text) is not a valid ATX heading.
+        var result = MarkdownParser.ToHtmlFragment("#Hello");
+        Assert.IsTrue(result.Contains("<p>"));
+        Assert.IsTrue(result.Contains("#Hello"));
+        Assert.IsFalse(result.Contains("<h1"));
+    }
+
+    [TestMethod]
+    public void ToHtmlFragment_ValidHeadingAfterBareHash_ParsesCorrectly()
+    {
+        // Ensure that valid headings following a bare '#' line are still parsed.
+        var result = MarkdownParser.ToHtmlFragment("#\n# Valid Heading");
+        Assert.IsTrue(result.Contains("<h1"));
+        Assert.IsTrue(result.Contains("Valid Heading"));
+    }
+
+    [TestMethod]
+    public void ToHtmlFragment_BareHashMixedWithContent_DoesNotHang()
+    {
+        // A document with a bare '#', normal text, and a proper heading
+        // must parse completely without hanging.
+        var markdown = "Some text\n#\nMore text\n# Heading\nFinal text";
+        var result = MarkdownParser.ToHtmlFragment(markdown);
+        Assert.IsTrue(result.Contains("Some text"));
+        Assert.IsTrue(result.Contains("More text"));
+        Assert.IsTrue(result.Contains("<h1"));
+        Assert.IsTrue(result.Contains("Heading"));
+        Assert.IsTrue(result.Contains("Final text"));
+    }
+
+    [TestMethod]
+    public void ToHtml_EditableDoesNotContainWysiwygToolbar()
+    {
+        // The embedded WYSIWYG toolbar was removed; the main WinUI toolbar
+        // now handles all formatting commands.
+        var result = MarkdownParser.ToHtml("Hello", editable: true);
+        Assert.IsFalse(result.Contains("wysiwyg-toolbar"));
+        Assert.IsFalse(result.Contains("fmt('bold')"));
+    }
+
+    [TestMethod]
+    public void ToHtml_EditableContainsHighlightTextFunction()
+    {
+        // The preview HTML must include the highlightText() function for
+        // cross-pane selection mirroring.
+        var result = MarkdownParser.ToHtml("Hello", editable: true);
+        Assert.IsTrue(result.Contains("highlightText"));
+    }
+
+    [TestMethod]
+    public void ToHtml_EditableContainsSelectionChangedMessage()
+    {
+        // The preview JS must post selectionChanged messages so the host
+        // can mirror the preview selection back into the editor.
+        var result = MarkdownParser.ToHtml("Hello", editable: true);
+        Assert.IsTrue(result.Contains("selectionChanged"));
+    }
+
+    [TestMethod]
+    public void ToHtml_EditableContainsDocumentHasFocusGuard()
+    {
+        // The selectionchange → C# message path must only fire while the WebView2
+        // has focus so a stale preview selection cannot override an in-progress
+        // editor selection after the user moves to the editor pane.
+        var result = MarkdownParser.ToHtml("Hello", editable: true);
+        Assert.IsTrue(result.Contains("document.hasFocus()"));
+    }
+
+    [TestMethod]
+    public void ToHtml_EditableContainsRequestAnimationFrameHighlight()
+    {
+        // The CSS Custom Highlight must be applied via requestAnimationFrame so that
+        // it is updated in a single paint, and the highlight persists regardless of
+        // WebView2 focus state (unlike the browser's native DOM selection).
+        var result = MarkdownParser.ToHtml("Hello", editable: true);
+        Assert.IsTrue(result.Contains("requestAnimationFrame"));
+        Assert.IsTrue(result.Contains("highlightAF"));
+    }
+
+    [TestMethod]
+    public void ToHtml_NonEditable_DoesNotContainSelectionSyncScript()
+    {
+        // The non-editable (read-only preview) mode has no selectionchange or
+        // highlightText machinery — it only needs the click/link handler.
+        var result = MarkdownParser.ToHtml("Hello", editable: false);
+        Assert.IsFalse(result.Contains("highlightText"));
+        Assert.IsFalse(result.Contains("selectionChanged"));
+        Assert.IsFalse(result.Contains("requestAnimationFrame"));
     }
 }
