@@ -2,6 +2,59 @@
 
 All notable changes to MarkUp Markdown Editor will be documented in this file.
 
+## [1.5.0] - 2025-06-19
+
+### Added
+- **File type association for `.md` / `.markdown`**: The app registers itself as a handler
+  for Markdown files in the MSIX manifest (`uap:FileTypeAssociation`). Double-clicking any
+  `.md` or `.markdown` file in Explorer opens it directly in MarkUp. The app also appears
+  in the *Open with* context-menu for those file types. File-activation paths are read via
+  `Microsoft.Windows.AppLifecycle.AppInstance.GetActivatedEventArgs()` on startup and the
+  document is loaded as soon as the WebView2 is ready.
+- **Heading toolbar dropdown**: A new *Heading* `AppBarButton` with a `MenuFlyout` lets you
+  apply H1–H6 heading levels directly from the toolbar without opening the Format menu.
+- **Blockquote toolbar button**: Inserts a blockquote prefix from the toolbar.
+- **Secondary toolbar commands**: Code Block, Task List, and Horizontal Rule are now
+  accessible as secondary (overflow) commands in the toolbar `CommandBar`.
+- **`ExpandToMarkdownBounds()`** public API on `MarkdownFormatter`: given a plain-text range
+  inside Markdown source, expands the selection outward to include any immediately
+  surrounding inline syntax markers (`**`, `*`, `~~`, `` ` ``, etc.), matching
+  longest-first so `***` is always preferred over `**` or `*`.
+- **Cross-pane selection mirroring**: Selecting text in the preview pane posts a
+  `selectionChanged` message back to the C# host. A CSS Custom Highlight
+  (`::highlight(sync-highlight)`) reflects the selection visually — unlike the browser's
+  native DOM selection, the highlight persists after the WebView2 loses focus.
+- **`SyncPreviewSelectionToEditorAsync()`**: When a format command is invoked and the
+  preview was last focused, the host reads the current preview selection and maps it back
+  to the matching span in the Markdown source before applying the formatter.
+
+### Fixed
+- **Bold/italic toggle incorrectly stripped markers on inner text**: `ToggleBold` and
+  `ToggleItalic` previously used a simple substring check that matched the first `*` of
+  `**` as an italic marker. The new `IsExactMarkerAt()` helper uses boundary guards so a
+  single `*` marker is never found inside a `**` run, and toggling italic on text inside
+  a bold span now correctly wraps rather than strips.
+- **Deployment timeout never enforced**: `ExecuteRemotePackageInstall` called
+  `ReadToEnd()` synchronously before `WaitForExit()`, so the 3-minute deployment timeout
+  was never actually applied — a hung WinRM session blocked indefinitely. Fixed by starting
+  async reads for stdout/stderr first and only collecting the output after `WaitForExit`
+  returns.
+- **WYSIWYG in-preview toolbar removed**: The floating formatting toolbar that was
+  rendered inside the `contenteditable` preview WebView2 is removed. All formatting
+  commands are now routed through the WinUI toolbar and Format menu, eliminating a
+  redundant UI element and the Z-order / hit-testing issues it caused.
+- **Split-pane columns could collapse to zero**: Added `MinWidth = 100` to editor and
+  preview grid columns in all view modes so neither panel can be accidentally collapsed
+  to zero width by the splitter.
+- **`_focusedPanel` renamed to `_lastFocusedPanel`**: Clarifies that the field tracks the
+  *last* panel to receive focus, not necessarily the currently focused one, which is
+  intentional so toolbar/menu interactions do not reset the routing target.
+
+### Changed
+- `Package.appxmanifest` version bumped to `1.5.0.0`.
+- `MarkdownFormatter.ToggleWrap` now uses `IsExactMarkerAt()` for all marker boundary
+  checks.
+
 ## [1.4.5] - 2025-06-18
 
 ### Added
