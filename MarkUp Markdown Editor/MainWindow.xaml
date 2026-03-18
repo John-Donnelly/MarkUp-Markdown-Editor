@@ -66,38 +66,18 @@
             </MenuBarItem>
 
             <MenuBarItem Title="Edit">
-                <MenuFlyoutItem x:Name="MenuUndo" Text="Undo" Click="MenuUndo_Click">
-                    <MenuFlyoutItem.KeyboardAccelerators>
-                        <KeyboardAccelerator Modifiers="Control" Key="Z" />
-                    </MenuFlyoutItem.KeyboardAccelerators>
-                </MenuFlyoutItem>
-                <MenuFlyoutItem x:Name="MenuRedo" Text="Redo" Click="MenuRedo_Click">
-                    <MenuFlyoutItem.KeyboardAccelerators>
-                        <KeyboardAccelerator Modifiers="Control" Key="Y" />
-                    </MenuFlyoutItem.KeyboardAccelerators>
-                </MenuFlyoutItem>
+                <!-- Undo/Redo/Cut/Copy/Paste/SelectAll have NO keyboard accelerators here.
+                     The TextBox (editor) and WebView2 (preview) handle Ctrl+Z/Y/X/C/V/A
+                     natively, so declaring them here would cause double-execution.
+                     These menu items are still fully functional when clicked. -->
+                <MenuFlyoutItem x:Name="MenuUndo" Text="Undo" Click="MenuUndo_Click" />
+                <MenuFlyoutItem x:Name="MenuRedo" Text="Redo" Click="MenuRedo_Click" />
                 <MenuFlyoutSeparator />
-                <MenuFlyoutItem x:Name="MenuCut" Text="Cut" Click="MenuCut_Click">
-                    <MenuFlyoutItem.KeyboardAccelerators>
-                        <KeyboardAccelerator Modifiers="Control" Key="X" />
-                    </MenuFlyoutItem.KeyboardAccelerators>
-                </MenuFlyoutItem>
-                <MenuFlyoutItem x:Name="MenuCopy" Text="Copy" Click="MenuCopy_Click">
-                    <MenuFlyoutItem.KeyboardAccelerators>
-                        <KeyboardAccelerator Modifiers="Control" Key="C" />
-                    </MenuFlyoutItem.KeyboardAccelerators>
-                </MenuFlyoutItem>
-                <MenuFlyoutItem x:Name="MenuPaste" Text="Paste" Click="MenuPaste_Click">
-                    <MenuFlyoutItem.KeyboardAccelerators>
-                        <KeyboardAccelerator Modifiers="Control" Key="V" />
-                    </MenuFlyoutItem.KeyboardAccelerators>
-                </MenuFlyoutItem>
+                <MenuFlyoutItem x:Name="MenuCut" Text="Cut" Click="MenuCut_Click" />
+                <MenuFlyoutItem x:Name="MenuCopy" Text="Copy" Click="MenuCopy_Click" />
+                <MenuFlyoutItem x:Name="MenuPaste" Text="Paste" Click="MenuPaste_Click" />
                 <MenuFlyoutSeparator />
-                <MenuFlyoutItem x:Name="MenuSelectAll" Text="Select All" Click="MenuSelectAll_Click">
-                    <MenuFlyoutItem.KeyboardAccelerators>
-                        <KeyboardAccelerator Modifiers="Control" Key="A" />
-                    </MenuFlyoutItem.KeyboardAccelerators>
-                </MenuFlyoutItem>
+                <MenuFlyoutItem x:Name="MenuSelectAll" Text="Select All" Click="MenuSelectAll_Click" />
                 <MenuFlyoutSeparator />
                 <MenuFlyoutItem x:Name="MenuFind" Text="Find &amp; Replace..." Click="MenuFind_Click">
                     <MenuFlyoutItem.KeyboardAccelerators>
@@ -209,6 +189,22 @@
                 </AppBarButton.Icon>
             </AppBarButton>
             <AppBarSeparator />
+            <AppBarButton x:Name="ToolbarHeading" Label="Heading" ToolTipService.ToolTip="Insert Heading (H1–H6)">
+                <AppBarButton.Icon>
+                    <FontIcon FontFamily="Segoe UI Variable Display" Glyph="H" />
+                </AppBarButton.Icon>
+                <AppBarButton.Flyout>
+                    <MenuFlyout>
+                        <MenuFlyoutItem Text="Heading 1" Click="MenuHeading1_Click" />
+                        <MenuFlyoutItem Text="Heading 2" Click="MenuHeading2_Click" />
+                        <MenuFlyoutItem Text="Heading 3" Click="MenuHeading3_Click" />
+                        <MenuFlyoutItem Text="Heading 4" Click="MenuHeading4_Click" />
+                        <MenuFlyoutItem Text="Heading 5" Click="MenuHeading5_Click" />
+                        <MenuFlyoutItem Text="Heading 6" Click="MenuHeading6_Click" />
+                    </MenuFlyout>
+                </AppBarButton.Flyout>
+            </AppBarButton>
+            <AppBarSeparator />
             <AppBarButton x:Name="ToolbarBulletList" Label="Bullet List" ToolTipService.ToolTip="Bullet List" Click="MenuUnorderedList_Click">
                 <AppBarButton.Icon>
                     <FontIcon Glyph="&#xE8FD;" />
@@ -219,6 +215,12 @@
                     <FontIcon Glyph="&#xE9D5;" />
                 </AppBarButton.Icon>
             </AppBarButton>
+            <AppBarButton x:Name="ToolbarBlockquote" Label="Blockquote" ToolTipService.ToolTip="Blockquote" Click="MenuBlockquote_Click">
+                <AppBarButton.Icon>
+                    <FontIcon Glyph="&#xE90A;" />
+                </AppBarButton.Icon>
+            </AppBarButton>
+            <AppBarSeparator />
             <AppBarButton x:Name="ToolbarLink" Label="Link" ToolTipService.ToolTip="Insert Link (Ctrl+K)" Click="MenuInsertLink_Click">
                 <AppBarButton.Icon>
                     <FontIcon Glyph="&#xE71B;" />
@@ -241,6 +243,22 @@
                 <AppBarButton Label="Font Settings..." Click="ToolbarFontSettings_Click">
                     <AppBarButton.Icon>
                         <FontIcon Glyph="&#xE8D2;" />
+                    </AppBarButton.Icon>
+                </AppBarButton>
+                <AppBarSeparator />
+                <AppBarButton Label="Code Block" ToolTipService.ToolTip="Code Block" Click="MenuCodeBlock_Click">
+                    <AppBarButton.Icon>
+                        <FontIcon Glyph="&#xEB7E;" />
+                    </AppBarButton.Icon>
+                </AppBarButton>
+                <AppBarButton Label="Task List" ToolTipService.ToolTip="Task List" Click="MenuTaskList_Click">
+                    <AppBarButton.Icon>
+                        <FontIcon Glyph="&#xE7B7;" />
+                    </AppBarButton.Icon>
+                </AppBarButton>
+                <AppBarButton Label="Horizontal Rule" ToolTipService.ToolTip="Horizontal Rule" Click="MenuHorizontalRule_Click">
+                    <AppBarButton.Icon>
+                        <FontIcon Glyph="&#xE73C;" />
                     </AppBarButton.Icon>
                 </AppBarButton>
             </CommandBar.SecondaryCommands>
@@ -369,6 +387,8 @@
                          ScrollViewer.HorizontalScrollBarVisibility="Auto"
                          TextChanged="EditorTextBox_TextChanged"
                          SelectionChanged="EditorTextBox_SelectionChanged"
+                         GotFocus="EditorTextBox_GotFocus"
+                         LostFocus="EditorTextBox_LostFocus"
                          PlaceholderText="Start typing Markdown here..." />
             </Grid>
 
@@ -392,7 +412,9 @@
                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                            Margin="12,6,12,2" />
 
-                <WebView2 x:Name="PreviewWebView" Grid.Row="1" DefaultBackgroundColor="Transparent" />
+                <WebView2 x:Name="PreviewWebView" Grid.Row="1" DefaultBackgroundColor="Transparent"
+                          GotFocus="PreviewWebView_GotFocus"
+                          LostFocus="PreviewWebView_LostFocus" />
             </Grid>
         </Grid>
 

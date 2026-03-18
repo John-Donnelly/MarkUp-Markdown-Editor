@@ -28,6 +28,7 @@ public sealed partial class MainWindow : Window
     private readonly DispatcherTimer _editorSyncTimer;  // Syncs _document when text is set via IValueProvider (no TextChanged)
     private bool _suppressTextChanged;
     private bool _suppressPreviewSync;
+    private bool _syncingSelectionFromPreview;
     private bool _webViewReady;
     private bool _printWebViewReady;
     private int _zoomPercent = 100;
@@ -47,12 +48,18 @@ public sealed partial class MainWindow : Window
     private enum ViewMode { Split, EditorOnly, PreviewOnly }
     private ViewMode _viewMode = ViewMode.Split;
 
-    // Tracks which editing panel has keyboard focus for routing edit commands
+    // Tracks which editing panel last held keyboard focus for routing edit/format commands.
+    // Unlike a "current focus" field, this is intentionally NOT reset when focus moves to a
+    // toolbar button or menu item so that formatting always targets the correct content pane.
     private enum FocusedPanel { None, Editor, Preview }
-    private FocusedPanel _focusedPanel = FocusedPanel.None;
+    private FocusedPanel _lastFocusedPanel = FocusedPanel.None;
 
-    public MainWindow()
+    // File path to open on startup when the app is activated via file-type association.
+    private readonly string? _initialFilePath;
+
+    public MainWindow(string? initialFilePath = null)
     {
+        _initialFilePath = initialFilePath;
         InitializeComponent();
 
         // Set window icon
@@ -60,6 +67,12 @@ public sealed partial class MainWindow : Window
 
         // Set minimum window size and reasonable default
         SetWindowSize(1280, 800);
+
+        // Keep selection visible in the editor even when it loses focus, so the user
+        // can see their selection position while interacting with the toolbar/menu.
+        EditorTextBox.SelectionHighlightColorWhenNotFocused =
+            new Microsoft.UI.Xaml.Media.SolidColorBrush(
+                Microsoft.UI.ColorHelper.FromArgb(100, 0, 120, 215));
 
         // Set up debounced preview timer
         _previewTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(300) };
@@ -132,6 +145,9 @@ public sealed partial class MainWindow : Window
             };
 
             UpdatePreview();
+
+            if (_initialFilePath is not null)
+                await LoadFileFromPathAsync(_initialFilePath);
         }
         catch
         {
@@ -191,6 +207,59 @@ public sealed partial class MainWindow : Window
                 return;
             }
 
+            // Handle preview selection changed: { "type": "selectionChanged", "text": "..." }
+            // Mirror the selection back into the editor (character-precision search) so the
+            // user can see the highlighted position in both panes simultaneously.
+            if (messageJson.Contains("selectionChanged"))
+            {
+                var textStartMarker = "\"text\":\"";
+                var textStart = messageJson.IndexOf(textStartMarker);
+                if (textStart >= 0)
+                {
+                    textStart += textStartMarker.Length;
+                    var textEnd = messageJson.LastIndexOf('"');
+                    if (textEnd > textStart)
+                    {
+                        var selectedText = messageJson[textStart..textEnd]
+                            .Replace("\\n", "\n")
+                            .Replace("\\r", "\r")
+                            .Replace("\\t", "\t")
+                            .Replace("\\\"", "\"")
+                            .Replace("\\/", "/")
+                            .Replace("\\\\", "\\");
+
+                        if (!string.IsNullOrEmpty(selectedText))
+                        {
+                            var index = EditorTextBox.Text.IndexOf(selectedText, StringComparison.Ordinal);
+                            if (index >= 0)
+                            {
+                                // Expand the selection to include surrounding Markdown syntax
+                                // markers (e.g. "bold" → "**bold**") so the editor highlights
+                                // the full formatted token, not just the visible plain text.
+                                var (expandedStart, expandedLength) =
+                                    MarkdownFormatter.ExpandToMarkdownBounds(EditorTextBox.Text, index, selectedText.Length);
+
+                                _syncingSelectionFromPreview = true;
+                                EditorTextBox.SelectionStart = expandedStart;
+                                EditorTextBox.SelectionLength = expandedLength;
+                                _syncingSelectionFromPreview = false;
+                                // Briefly focus the editor so WinUI3 transitions through its
+                                // Focused→Unfocused visual states and correctly renders
+                                // SelectionHighlightColorWhenNotFocused. Return focus to the
+                                // preview immediately; WinUI3 batches both focus changes in a
+                                // single render frame so there is no visible flicker.
+                                // The CSS Custom Highlight (::highlight(sync-highlight)) in
+                                // the preview persists because it is not affected by WinUI3
+                                // focus transitions.
+                                EditorTextBox.Focus(FocusState.Programmatic);
+                                PreviewWebView.Focus(FocusState.Programmatic);
+                            }
+                        }
+                    }
+                }
+                return;
+            }
+
             // Handle content changed: { "type": "contentChanged", "html": "..." }
             if (!messageJson.Contains("contentChanged")) return;
 
@@ -244,27 +313,27 @@ public sealed partial class MainWindow : Window
 
     private void EditorTextBox_GotFocus(object sender, RoutedEventArgs e)
     {
-        _focusedPanel = FocusedPanel.Editor;
+        _lastFocusedPanel = FocusedPanel.Editor;
         RefreshAutomationState();
     }
 
     private void EditorTextBox_LostFocus(object sender, RoutedEventArgs e)
     {
-        if (_focusedPanel == FocusedPanel.Editor)
-            _focusedPanel = FocusedPanel.None;
+        // Intentionally do NOT reset _lastFocusedPanel here.
+        // Toolbar/menu clicks move focus away from the editor, but formatting
+        // commands should still target the editor until the preview is focused.
         RefreshAutomationState();
     }
 
     private void PreviewWebView_GotFocus(object sender, RoutedEventArgs e)
     {
-        _focusedPanel = FocusedPanel.Preview;
+        _lastFocusedPanel = FocusedPanel.Preview;
         RefreshAutomationState();
     }
 
     private void PreviewWebView_LostFocus(object sender, RoutedEventArgs e)
     {
-        if (_focusedPanel == FocusedPanel.Preview)
-            _focusedPanel = FocusedPanel.None;
+        // Intentionally do NOT reset _lastFocusedPanel here.
         RefreshAutomationState();
     }
 
@@ -285,6 +354,46 @@ public sealed partial class MainWindow : Window
     private void EditorTextBox_SelectionChanged(object sender, RoutedEventArgs e)
     {
         UpdateCursorPosition();
+        SyncEditorSelectionToPreview();
+    }
+
+    /// <summary>
+    /// Strips common inline Markdown syntax characters from <paramref name="text"/> and
+    /// returns the plain visible string that the preview would render.  Used to locate the
+    /// equivalent highlighted region inside the WebView2 content.
+    /// </summary>
+    private static string StripInlineMarkdown(string text)
+    {
+        // Remove bold/italic markers: **, __, *, _
+        text = System.Text.RegularExpressions.Regex.Replace(text, @"\*{1,3}|_{1,3}", string.Empty);
+        // Remove strikethrough: ~~
+        text = System.Text.RegularExpressions.Regex.Replace(text, @"~~", string.Empty);
+        // Remove inline code backticks: `
+        text = text.Replace("`", string.Empty);
+        // Remove heading prefix: # at line start
+        text = System.Text.RegularExpressions.Regex.Replace(text, @"^#{1,6}\s", string.Empty, System.Text.RegularExpressions.RegexOptions.Multiline);
+        // Collapse any leftover whitespace runs introduced by removing syntax
+        text = text.Trim();
+        return text;
+    }
+
+    private void SyncEditorSelectionToPreview()
+    {
+        // Bail out when editor selection is being set programmatically from the preview;
+        // the JS selectionchange listener has already applied the correct CSS highlight.
+        if (_syncingSelectionFromPreview) return;
+        if (!_webViewReady || PreviewWebView.CoreWebView2 == null) return;
+        if (EditorTextBox.SelectionLength == 0)
+        {
+            _ = PreviewWebView.CoreWebView2.ExecuteScriptAsync("if(typeof highlightText==='function') highlightText('');");
+            return;
+        }
+
+        var plainText = StripInlineMarkdown(EditorTextBox.SelectedText);
+        if (string.IsNullOrEmpty(plainText)) return;
+
+        var escaped = JsonSerializer.Serialize(plainText);
+        _ = PreviewWebView.CoreWebView2.ExecuteScriptAsync($"if(typeof highlightText==='function') highlightText({escaped});");
     }
 
     private void PreviewTimer_Tick(object? sender, object e)
@@ -434,7 +543,7 @@ public sealed partial class MainWindow : Window
     {
         AutomationDocumentContent.Text = TrimAutomationText(_document.Content);
         AutomationPreviewHtml.Text = TrimAutomationText(MarkdownParser.ToHtmlFragment(_document.Content));
-        AutomationFocusedPanel.Text = _focusedPanel.ToString();
+        AutomationFocusedPanel.Text = _lastFocusedPanel.ToString();
         AutomationViewMode.Text = _viewMode.ToString();
     }
 
@@ -501,11 +610,21 @@ public sealed partial class MainWindow : Window
         var file = await picker.PickSingleFileAsync();
         if (file == null) return;
 
+        await LoadFileFromPathAsync(file.Path);
+    }
+
+    /// <summary>
+    /// Loads a Markdown file from <paramref name="path"/> into the editor, replacing the
+    /// current document. Called both from the Open dialog and on startup when the app is
+    /// launched via a .md / .markdown file-type association.
+    /// </summary>
+    private async Task LoadFileFromPathAsync(string path)
+    {
         try
         {
-            var content = await File.ReadAllTextAsync(file.Path);
+            var content = await File.ReadAllTextAsync(path);
             _document.Reset();
-            _document.FilePath = file.Path;
+            _document.FilePath = path;
             _suppressTextChanged = true;
             EditorTextBox.Text = content;
             _suppressTextChanged = false;
@@ -718,7 +837,7 @@ public sealed partial class MainWindow : Window
 
     private void MenuUndo_Click(object sender, RoutedEventArgs e)
     {
-        if (_focusedPanel == FocusedPanel.Preview)
+        if (_lastFocusedPanel == FocusedPanel.Preview)
             _ = PreviewWebView.CoreWebView2?.ExecuteScriptAsync("document.execCommand('undo')");
         else
             EditorTextBox.Undo();
@@ -726,7 +845,7 @@ public sealed partial class MainWindow : Window
 
     private void MenuRedo_Click(object sender, RoutedEventArgs e)
     {
-        if (_focusedPanel == FocusedPanel.Preview)
+        if (_lastFocusedPanel == FocusedPanel.Preview)
             _ = PreviewWebView.CoreWebView2?.ExecuteScriptAsync("document.execCommand('redo')");
         else
             EditorTextBox.Redo();
@@ -734,7 +853,7 @@ public sealed partial class MainWindow : Window
 
     private void MenuCut_Click(object sender, RoutedEventArgs e)
     {
-        if (_focusedPanel == FocusedPanel.Preview)
+        if (_lastFocusedPanel == FocusedPanel.Preview)
         {
             _ = PreviewWebView.CoreWebView2?.ExecuteScriptAsync("document.execCommand('cut')");
             return;
@@ -745,17 +864,15 @@ public sealed partial class MainWindow : Window
             var dp = new DataPackage();
             dp.SetText(EditorTextBox.SelectedText);
             Clipboard.SetContent(dp);
-
             var start = EditorTextBox.SelectionStart;
-            var text = EditorTextBox.Text;
-            EditorTextBox.Text = text.Remove(start, EditorTextBox.SelectionLength);
+            EditorTextBox.Text = EditorTextBox.Text.Remove(start, EditorTextBox.SelectionLength);
             EditorTextBox.SelectionStart = start;
         }
     }
 
     private void MenuCopy_Click(object sender, RoutedEventArgs e)
     {
-        if (_focusedPanel == FocusedPanel.Preview)
+        if (_lastFocusedPanel == FocusedPanel.Preview)
         {
             _ = PreviewWebView.CoreWebView2?.ExecuteScriptAsync("document.execCommand('copy')");
             return;
@@ -771,14 +888,16 @@ public sealed partial class MainWindow : Window
 
     private async void MenuPaste_Click(object sender, RoutedEventArgs e)
     {
-        if (_focusedPanel == FocusedPanel.Preview)
+        if (_lastFocusedPanel == FocusedPanel.Preview)
         {
-            // Use Clipboard API first; fall back to execCommand for older runtimes
             _ = PreviewWebView.CoreWebView2?.ExecuteScriptAsync(
                 "navigator.clipboard.readText().then(function(t){document.execCommand('insertText',false,t)}).catch(function(){document.execCommand('paste')})");
             return;
         }
 
+        // Paste into editor — read clipboard and insert at the current cursor position.
+        // We do this manually (rather than calling EditorTextBox.Paste()) so we can ensure
+        // _document.Content stays in sync and the preview updates.
         var content = Clipboard.GetContent();
         if (content.Contains(StandardDataFormats.Text))
         {
@@ -800,7 +919,7 @@ public sealed partial class MainWindow : Window
 
     private void MenuSelectAll_Click(object sender, RoutedEventArgs e)
     {
-        if (_focusedPanel == FocusedPanel.Preview)
+        if (_lastFocusedPanel == FocusedPanel.Preview)
             _ = PreviewWebView.CoreWebView2?.ExecuteScriptAsync("document.execCommand('selectAll')");
         else
             EditorTextBox.SelectAll();
@@ -914,6 +1033,49 @@ public sealed partial class MainWindow : Window
 
     #region Format Menu
 
+    /// <summary>
+    /// If the preview pane was last focused, reads its current text selection and maps
+    /// it back to the corresponding position in the Markdown source so that the next
+    /// formatting call operates on the correct span of text.
+    /// </summary>
+    private async Task SyncPreviewSelectionToEditorAsync()
+    {
+        if (!_webViewReady || PreviewWebView.CoreWebView2 == null) return;
+        try
+        {
+            var result = await PreviewWebView.CoreWebView2.ExecuteScriptAsync(
+                "window.getSelection() ? window.getSelection().toString() : ''");
+            if (string.IsNullOrEmpty(result) || result is "\"\"" or "null") return;
+
+            var selectedText = JsonSerializer.Deserialize<string>(result);
+            if (string.IsNullOrEmpty(selectedText)) return;
+
+            var index = EditorTextBox.Text.IndexOf(selectedText, StringComparison.Ordinal);
+            if (index < 0) return;
+
+            EditorTextBox.SelectionStart = index;
+            EditorTextBox.SelectionLength = selectedText.Length;
+        }
+        catch
+        {
+            // Swallow WebView2 script execution errors
+        }
+    }
+
+    private async Task ApplyFormattingAsync(Func<string, int, int, FormattingResult> formatter)
+    {
+        if (_lastFocusedPanel == FocusedPanel.Preview)
+            await SyncPreviewSelectionToEditorAsync();
+        ApplyFormatting(formatter);
+    }
+
+    private async Task ApplyLineFormattingAsync(Func<string, int, FormattingResult> formatter)
+    {
+        if (_lastFocusedPanel == FocusedPanel.Preview)
+            await SyncPreviewSelectionToEditorAsync();
+        ApplyLineFormatting(formatter);
+    }
+
     private void ApplyFormatting(Func<string, int, int, FormattingResult> formatter)
     {
         var text = EditorTextBox.Text;
@@ -956,19 +1118,22 @@ public sealed partial class MainWindow : Window
     }
 
     private void MenuBold_Click(object sender, RoutedEventArgs e)
-        => ApplyFormatting(MarkdownFormatter.ToggleBold);
+        => _ = ApplyFormattingAsync(MarkdownFormatter.ToggleBold);
 
     private void MenuItalic_Click(object sender, RoutedEventArgs e)
-        => ApplyFormatting(MarkdownFormatter.ToggleItalic);
+        => _ = ApplyFormattingAsync(MarkdownFormatter.ToggleItalic);
 
     private void MenuStrikethrough_Click(object sender, RoutedEventArgs e)
-        => ApplyFormatting(MarkdownFormatter.ToggleStrikethrough);
+        => _ = ApplyFormattingAsync(MarkdownFormatter.ToggleStrikethrough);
 
     private void MenuInlineCode_Click(object sender, RoutedEventArgs e)
-        => ApplyFormatting(MarkdownFormatter.ToggleInlineCode);
+        => _ = ApplyFormattingAsync(MarkdownFormatter.ToggleInlineCode);
 
-    private void InsertHeading(int level)
+    private async Task InsertHeadingAsync(int level)
     {
+        if (_lastFocusedPanel == FocusedPanel.Preview)
+            await SyncPreviewSelectionToEditorAsync();
+
         var text = EditorTextBox.Text;
         var selStart = EditorTextBox.SelectionStart;
         var result = MarkdownFormatter.InsertHeading(text, selStart, level);
@@ -985,39 +1150,42 @@ public sealed partial class MainWindow : Window
         _previewTimer.Start();
     }
 
-    private void MenuHeading1_Click(object sender, RoutedEventArgs e) => InsertHeading(1);
-    private void MenuHeading2_Click(object sender, RoutedEventArgs e) => InsertHeading(2);
-    private void MenuHeading3_Click(object sender, RoutedEventArgs e) => InsertHeading(3);
-    private void MenuHeading4_Click(object sender, RoutedEventArgs e) => InsertHeading(4);
-    private void MenuHeading5_Click(object sender, RoutedEventArgs e) => InsertHeading(5);
-    private void MenuHeading6_Click(object sender, RoutedEventArgs e) => InsertHeading(6);
+    private void MenuHeading1_Click(object sender, RoutedEventArgs e) => _ = InsertHeadingAsync(1);
+    private void MenuHeading2_Click(object sender, RoutedEventArgs e) => _ = InsertHeadingAsync(2);
+    private void MenuHeading3_Click(object sender, RoutedEventArgs e) => _ = InsertHeadingAsync(3);
+    private void MenuHeading4_Click(object sender, RoutedEventArgs e) => _ = InsertHeadingAsync(4);
+    private void MenuHeading5_Click(object sender, RoutedEventArgs e) => _ = InsertHeadingAsync(5);
+    private void MenuHeading6_Click(object sender, RoutedEventArgs e) => _ = InsertHeadingAsync(6);
 
     private void MenuUnorderedList_Click(object sender, RoutedEventArgs e)
-        => ApplyLineFormatting(MarkdownFormatter.InsertUnorderedList);
+        => _ = ApplyLineFormattingAsync(MarkdownFormatter.InsertUnorderedList);
 
     private void MenuOrderedList_Click(object sender, RoutedEventArgs e)
-        => ApplyLineFormatting(MarkdownFormatter.InsertOrderedList);
+        => _ = ApplyLineFormattingAsync(MarkdownFormatter.InsertOrderedList);
 
     private void MenuTaskList_Click(object sender, RoutedEventArgs e)
-        => ApplyLineFormatting(MarkdownFormatter.InsertTaskList);
+        => _ = ApplyLineFormattingAsync(MarkdownFormatter.InsertTaskList);
 
     private void MenuBlockquote_Click(object sender, RoutedEventArgs e)
-        => ApplyLineFormatting(MarkdownFormatter.InsertBlockquote);
+        => _ = ApplyLineFormattingAsync(MarkdownFormatter.InsertBlockquote);
 
     private void MenuCodeBlock_Click(object sender, RoutedEventArgs e)
-        => ApplyFormatting(MarkdownFormatter.InsertCodeBlock);
+        => _ = ApplyFormattingAsync(MarkdownFormatter.InsertCodeBlock);
 
     private void MenuHorizontalRule_Click(object sender, RoutedEventArgs e)
-        => ApplyLineFormatting(MarkdownFormatter.InsertHorizontalRule);
+        => _ = ApplyLineFormattingAsync(MarkdownFormatter.InsertHorizontalRule);
 
     private void MenuInsertLink_Click(object sender, RoutedEventArgs e)
-        => ApplyFormatting(MarkdownFormatter.InsertLink);
+        => _ = ApplyFormattingAsync(MarkdownFormatter.InsertLink);
 
     private void MenuInsertImage_Click(object sender, RoutedEventArgs e)
-        => ApplyFormatting(MarkdownFormatter.InsertImage);
+        => _ = ApplyFormattingAsync(MarkdownFormatter.InsertImage);
 
-    private void MenuInsertTable_Click(object sender, RoutedEventArgs e)
+    private async void MenuInsertTable_Click(object sender, RoutedEventArgs e)
     {
+        if (_lastFocusedPanel == FocusedPanel.Preview)
+            await SyncPreviewSelectionToEditorAsync();
+
         var text = EditorTextBox.Text;
         var selStart = EditorTextBox.SelectionStart;
         var result = MarkdownFormatter.InsertTable(text, selStart, 3, 3);
@@ -1045,8 +1213,10 @@ public sealed partial class MainWindow : Window
         {
             case ViewMode.EditorOnly:
                 EditorColumn.Width = new GridLength(1, GridUnitType.Star);
+                EditorColumn.MinWidth = 100;
                 SplitterColumn.Width = new GridLength(0);
                 PreviewColumn.Width = new GridLength(0);
+                PreviewColumn.MinWidth = 0;
                 SplitterBorder.Visibility = Visibility.Collapsed;
                 PreviewPanel.Visibility = Visibility.Collapsed;
                 EditorPanel.Visibility = Visibility.Visible;
@@ -1054,8 +1224,10 @@ public sealed partial class MainWindow : Window
 
             case ViewMode.PreviewOnly:
                 EditorColumn.Width = new GridLength(0);
+                EditorColumn.MinWidth = 0;
                 SplitterColumn.Width = new GridLength(0);
                 PreviewColumn.Width = new GridLength(1, GridUnitType.Star);
+                PreviewColumn.MinWidth = 100;
                 SplitterBorder.Visibility = Visibility.Collapsed;
                 EditorPanel.Visibility = Visibility.Collapsed;
                 PreviewPanel.Visibility = Visibility.Visible;
@@ -1064,8 +1236,10 @@ public sealed partial class MainWindow : Window
             case ViewMode.Split:
             default:
                 EditorColumn.Width = new GridLength(1, GridUnitType.Star);
+                EditorColumn.MinWidth = 100;
                 SplitterColumn.Width = GridLength.Auto;
                 PreviewColumn.Width = new GridLength(1, GridUnitType.Star);
+                PreviewColumn.MinWidth = 100;
                 SplitterBorder.Visibility = Visibility.Visible;
                 EditorPanel.Visibility = Visibility.Visible;
                 PreviewPanel.Visibility = Visibility.Visible;
@@ -1121,14 +1295,14 @@ public sealed partial class MainWindow : Window
     private void AutomationFocusEditorButton_Click(object sender, RoutedEventArgs e)
     {
         EditorTextBox.Focus(FocusState.Programmatic);
-        _focusedPanel = FocusedPanel.Editor;
+        _lastFocusedPanel = FocusedPanel.Editor;
         RefreshAutomationState();
     }
 
     private void AutomationFocusPreviewButton_Click(object sender, RoutedEventArgs e)
     {
         PreviewWebView.Focus(FocusState.Programmatic);
-        _focusedPanel = FocusedPanel.Preview;
+        _lastFocusedPanel = FocusedPanel.Preview;
         RefreshAutomationState();
     }
 
@@ -1136,7 +1310,7 @@ public sealed partial class MainWindow : Window
     {
         if (!_webViewReady) return;
 
-        _focusedPanel = FocusedPanel.Preview;
+        _lastFocusedPanel = FocusedPanel.Preview;
         await PreviewWebView.CoreWebView2.ExecuteScriptAsync(
             "var body=document.getElementById('editor-body'); if(body){ body.focus(); body.innerHTML='<p>preview bridge text</p>'; if(window.notifyChange){ notifyChange(); }}");
         RefreshAutomationState();
@@ -1146,7 +1320,7 @@ public sealed partial class MainWindow : Window
     {
         if (!_webViewReady) return;
 
-        _focusedPanel = FocusedPanel.Preview;
+        _lastFocusedPanel = FocusedPanel.Preview;
         await PreviewWebView.CoreWebView2.ExecuteScriptAsync(
             "var body=document.getElementById('editor-body'); if(body){ body.focus(); body.innerHTML='<p><strong>preview bold text</strong></p>'; if(window.notifyChange){ notifyChange(); }}");
         RefreshAutomationState();
