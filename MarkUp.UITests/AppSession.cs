@@ -1098,14 +1098,20 @@ finally
         };
 
         ps.Start();
-        string stdout = ps.StandardOutput.ReadToEnd();
-        string stderr = ps.StandardError.ReadToEnd();
+
+        // Read stdout/stderr asynchronously so that WaitForExit() enforces the real
+        // timeout instead of blocking forever inside ReadToEnd() if the script hangs.
+        var stdoutTask = ps.StandardOutput.ReadToEndAsync();
+        var stderrTask = ps.StandardError.ReadToEndAsync();
 
         if (!ps.WaitForExit((int)timeout.TotalMilliseconds))
         {
             try { ps.Kill(entireProcessTree: true); } catch { }
             throw new InvalidOperationException("Timed out waiting for remote package installation to complete.");
         }
+
+        string stdout = stdoutTask.GetAwaiter().GetResult();
+        string stderr = stderrTask.GetAwaiter().GetResult();
 
         if (ps.ExitCode != 0)
         {
