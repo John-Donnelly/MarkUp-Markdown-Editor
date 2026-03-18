@@ -195,8 +195,12 @@ public static class MarkdownFormatter
 
         var selected = fullText.Substring(selectionStart, selectionLength);
 
-        // Check if already wrapped
-        if (selected.StartsWith(marker) && selected.EndsWith(marker) && selected.Length > marker.Length * 2)
+        // Check if the selection itself is already wrapped with exactly this marker.
+        // IsExactMarkerAt guards against e.g. "*" matching inside "**", which would
+        // otherwise cause italic-toggle to strip one "*" each side of bold text.
+        if (IsExactMarkerAt(selected, 0, marker) &&
+            IsExactMarkerAt(selected, selected.Length - marker.Length, marker) &&
+            selected.Length > marker.Length * 2)
         {
             // Remove markers
             var unwrapped = selected[marker.Length..^marker.Length];
@@ -204,11 +208,10 @@ public static class MarkdownFormatter
             return new FormattingResult(newText, selectionStart, unwrapped.Length);
         }
 
-        // Also check if the surrounding text contains the markers
-        if (selectionStart >= marker.Length &&
-            selectionStart + selectionLength + marker.Length <= fullText.Length &&
-            fullText.Substring(selectionStart - marker.Length, marker.Length) == marker &&
-            fullText.Substring(selectionStart + selectionLength, marker.Length) == marker)
+        // Also check if the surrounding text contains exactly this marker (not a
+        // longer run — e.g. do not treat the inner "*" of "**" as an italic marker).
+        if (IsExactMarkerAt(fullText, selectionStart - marker.Length, marker) &&
+            IsExactMarkerAt(fullText, selectionStart + selectionLength, marker))
         {
             // Remove surrounding markers
             var newText = fullText[..(selectionStart - marker.Length)] + selected + fullText[(selectionStart + selectionLength + marker.Length)..];
@@ -221,6 +224,23 @@ public static class MarkdownFormatter
             var newText = fullText[..selectionStart] + wrapped + fullText[(selectionStart + selectionLength)..];
             return new FormattingResult(newText, selectionStart, wrapped.Length);
         }
+    }
+
+    // Returns true only when text[pos..pos+marker.Length] exactly equals marker and
+    // is not part of a longer run of the same marker on either side.
+    // The guards check for a full duplicate of the marker adjacent to the match, so
+    // that "*" is not found inside "**" but "**" IS correctly found inside "***"
+    // (which is bold+italic, not a longer bold marker).
+    private static bool IsExactMarkerAt(string text, int pos, string marker)
+    {
+        if (pos < 0 || pos + marker.Length > text.Length) return false;
+        if (text.Substring(pos, marker.Length) != marker) return false;
+        // Guard: a full copy of the marker immediately before would mean this is
+        // part of a doubled run (e.g. "**" before pos 1 would make "***").
+        if (pos >= marker.Length && text.Substring(pos - marker.Length, marker.Length) == marker) return false;
+        // Guard: a full copy of the marker immediately after has the same meaning.
+        if (pos + marker.Length * 2 <= text.Length && text.Substring(pos + marker.Length, marker.Length) == marker) return false;
+        return true;
     }
 
     private static FormattingResult InsertLinePrefix(string fullText, int selectionStart, string prefix)
@@ -241,6 +261,53 @@ public static class MarkdownFormatter
     {
         var idx = text.IndexOf('\n', position);
         return idx < 0 ? text.Length : idx;
+    }
+
+    /// <summary>
+    /// Given a plain-text range inside <paramref name="markdown"/> source, expands the
+    /// range outward to include any immediately surrounding inline Markdown syntax markers
+    /// (bold, italic, bold+italic, strikethrough, inline code).
+    /// Markers are checked longest-first so <c>***</c> is matched before <c>**</c>.
+    /// Nesting is handled iteratively: <c>**_text_**</c> first expands <c>_…_</c> then
+    /// <c>**…**</c>.
+    /// </summary>
+    /// <returns>
+    /// A tuple of the adjusted <c>(start, length)</c> that covers the full Markdown token.
+    /// Returns the original values unchanged when no surrounding markers are found.
+    /// </returns>
+    public static (int start, int length) ExpandToMarkdownBounds(string markdown, int textStart, int textLength)
+    {
+        if (string.IsNullOrEmpty(markdown) || textStart < 0 || textLength <= 0)
+            return (textStart, textLength);
+        if (textStart + textLength > markdown.Length)
+            return (textStart, textLength);
+
+        int s = textStart;
+        int e = textStart + textLength;
+
+        // Ordered longest-first so *** and ___ are matched before ** and __.
+        string[] markers = ["***", "___", "**", "__", "~~", "*", "_", "`"];
+
+        bool expanded = true;
+        while (expanded)
+        {
+            expanded = false;
+            foreach (var marker in markers)
+            {
+                int ml = marker.Length;
+                if (s >= ml && e + ml <= markdown.Length
+                    && string.CompareOrdinal(markdown, s - ml, marker, 0, ml) == 0
+                    && string.CompareOrdinal(markdown, e, marker, 0, ml) == 0)
+                {
+                    s -= ml;
+                    e += ml;
+                    expanded = true;
+                    break;
+                }
+            }
+        }
+
+        return (s, e - s);
     }
 }
 
