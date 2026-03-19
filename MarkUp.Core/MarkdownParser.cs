@@ -400,8 +400,8 @@ public static partial class MarkdownParser
 <script>
   var _suppressNotify = false;
   var debounceTimer;
-  var selectionDebounce;
-  var highlightAF;
+  var selectionAF;
+  var selectionFinalTimer;
 
   // Called by C# host to update content without triggering a round-trip sync.
   function updateContent(html) {
@@ -417,7 +417,7 @@ public static partial class MarkdownParser
     debounceTimer = setTimeout(function() {
       var content = document.getElementById('editor-body').innerHTML;
       window.chrome.webview.postMessage(JSON.stringify({ type: 'contentChanged', html: content }));
-    }, 400);
+    }, 100);
   }
 
   // Called by C# host to highlight plain text in the preview that mirrors the editor selection.
@@ -467,43 +467,47 @@ public static partial class MarkdownParser
       body.addEventListener('input', notifyChange);
       body.addEventListener('paste', function(e) { setTimeout(notifyChange, 100); });
     }
-    // Mirror the selection in the preview via CSS Custom Highlight immediately so
-    // the highlight persists even after the WebView2 loses focus (the browser's
-    // native DOM selection fades on blur; ::highlight(sync-highlight) does not).
+    // Mirror the selection in the preview via CSS Custom Highlight and notify
+    // the C# host on every animation frame so the editor selection tracks
+    // character-by-character as the user drags.  A deferred 'selectionChanged'
+    // fires 100 ms after the selection stabilises to trigger the focus dance
+    // (needed for WinUI3 to render SelectionHighlightColorWhenNotFocused).
     document.addEventListener('selectionchange', function() {
-      if (highlightAF) cancelAnimationFrame(highlightAF);
-      highlightAF = requestAnimationFrame(function() {
+      if (selectionAF) cancelAnimationFrame(selectionAF);
+      selectionAF = requestAnimationFrame(function() {
         var sel = window.getSelection();
         if (sel && !sel.isCollapsed && sel.rangeCount > 0) {
-          highlightText(sel.toString());
+          var text = sel.toString();
+          highlightText(text);
+          if (text && text.length > 0 && document.hasFocus()) {
+            window.chrome.webview.postMessage(JSON.stringify({ type: 'selectionChanging', text: text }));
+            // Schedule a final notification after the selection stabilises
+            clearTimeout(selectionFinalTimer);
+            selectionFinalTimer = setTimeout(function() {
+              if (!document.hasFocus()) return;
+              var s = window.getSelection();
+              if (!s || s.isCollapsed || s.rangeCount === 0) return;
+              var t = s.toString();
+              if (t && t.length > 0) {
+                window.chrome.webview.postMessage(JSON.stringify({ type: 'selectionChanged', text: t }));
+              }
+            }, 100);
+          }
         } else {
           highlightText('');
         }
       });
-      // Notify the C# host so it can mirror the selection in the editor pane.
-      // Only send the message while the WebView2 has focus; if the user has already
-      // moved to the editor the stale preview selection must not override their
-      // current editor selection.
-      clearTimeout(selectionDebounce);
-      selectionDebounce = setTimeout(function() {
-        if (!document.hasFocus()) return;
-        var s = window.getSelection();
-        if (!s || s.isCollapsed || s.rangeCount === 0) return;
-        var t = s.toString();
-        if (t && t.length > 0) {
-          window.chrome.webview.postMessage(JSON.stringify({ type: 'selectionChanged', text: t }));
-        }
-      }, 200);
     });
-    // Send selection on pointerup immediately — document.hasFocus() can be unreliable
-    // in WinUI 3 after the 200ms debounce delay, so handle pointer-based selections
-    // eagerly at the moment the user releases the pointer.
+    // Send final selection on pointerup immediately — clears the deferred timer
+    // so the focus dance happens exactly once at the end of a pointer drag.
     document.addEventListener('pointerup', function() {
-      clearTimeout(selectionDebounce);
+      clearTimeout(selectionFinalTimer);
+      if (selectionAF) cancelAnimationFrame(selectionAF);
       var s = window.getSelection();
       if (!s || s.isCollapsed || s.rangeCount === 0) return;
       var t = s.toString();
       if (t && t.length > 0) {
+        highlightText(t);
         window.chrome.webview.postMessage(JSON.stringify({ type: 'selectionChanged', text: t }));
       }
     });

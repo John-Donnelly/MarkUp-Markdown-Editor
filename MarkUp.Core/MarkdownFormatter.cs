@@ -1,3 +1,5 @@
+using System.Text.RegularExpressions;
+
 namespace MarkUp.Core;
 
 /// <summary>
@@ -308,6 +310,30 @@ public static class MarkdownFormatter
         }
 
         return (s, e - s);
+    }
+
+    /// <summary>
+    /// Strips common inline Markdown syntax characters from <paramref name="text"/> and
+    /// returns the plain visible string that the preview would render.  Used to locate the
+    /// equivalent highlighted region inside the WebView2 content when mirroring selections
+    /// from the editor to the preview.
+    /// </summary>
+    public static string StripInlineMarkdown(string text)
+    {
+        if (string.IsNullOrEmpty(text))
+            return string.Empty;
+
+        // Remove bold/italic markers: **, __, *, _
+        text = Regex.Replace(text, @"\*{1,3}|_{1,3}", string.Empty);
+        // Remove strikethrough: ~~
+        text = Regex.Replace(text, @"~~", string.Empty);
+        // Remove inline code backticks: `
+        text = text.Replace("`", string.Empty);
+        // Remove heading prefix: # at line start
+        text = Regex.Replace(text, @"^#{1,6}\s", string.Empty, RegexOptions.Multiline);
+        // Collapse any leftover whitespace runs introduced by removing syntax
+        text = text.Trim();
+        return text;
     }
 }
 
