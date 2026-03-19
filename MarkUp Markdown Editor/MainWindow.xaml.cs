@@ -207,56 +207,23 @@ public sealed partial class MainWindow : Window
                 return;
             }
 
-            // Handle preview selection changed: { "type": "selectionChanged", "text": "..." }
-            // Mirror the selection back into the editor (character-precision search) so the
-            // user can see the highlighted position in both panes simultaneously.
+            // Handle intermediate selection changing (drag in progress):
+            // { "type": "selectionChanging", "text": "..." }
+            // Updates the editor selection on every animation frame without a focus
+            // dance so the highlight tracks character-by-character during drag.
+            if (messageJson.Contains("selectionChanging"))
+            {
+                ApplyPreviewSelectionToEditor(messageJson, performFocusDance: false);
+                return;
+            }
+
+            // Handle final selection changed (pointer released or selection stabilised):
+            // { "type": "selectionChanged", "text": "..." }
+            // Includes the focus dance so WinUI3 renders
+            // SelectionHighlightColorWhenNotFocused correctly.
             if (messageJson.Contains("selectionChanged"))
             {
-                var textStartMarker = "\"text\":\"";
-                var textStart = messageJson.IndexOf(textStartMarker);
-                if (textStart >= 0)
-                {
-                    textStart += textStartMarker.Length;
-                    var textEnd = messageJson.LastIndexOf('"');
-                    if (textEnd > textStart)
-                    {
-                        var selectedText = messageJson[textStart..textEnd]
-                            .Replace("\\n", "\n")
-                            .Replace("\\r", "\r")
-                            .Replace("\\t", "\t")
-                            .Replace("\\\"", "\"")
-                            .Replace("\\/", "/")
-                            .Replace("\\\\", "\\");
-
-                        if (!string.IsNullOrEmpty(selectedText))
-                        {
-                            var index = EditorTextBox.Text.IndexOf(selectedText, StringComparison.Ordinal);
-                            if (index >= 0)
-                            {
-                                // Expand the selection to include surrounding Markdown syntax
-                                // markers (e.g. "bold" → "**bold**") so the editor highlights
-                                // the full formatted token, not just the visible plain text.
-                                var (expandedStart, expandedLength) =
-                                    MarkdownFormatter.ExpandToMarkdownBounds(EditorTextBox.Text, index, selectedText.Length);
-
-                                _syncingSelectionFromPreview = true;
-                                EditorTextBox.SelectionStart = expandedStart;
-                                EditorTextBox.SelectionLength = expandedLength;
-                                _syncingSelectionFromPreview = false;
-                                // Briefly focus the editor so WinUI3 transitions through its
-                                // Focused→Unfocused visual states and correctly renders
-                                // SelectionHighlightColorWhenNotFocused. Return focus to the
-                                // preview immediately; WinUI3 batches both focus changes in a
-                                // single render frame so there is no visible flicker.
-                                // The CSS Custom Highlight (::highlight(sync-highlight)) in
-                                // the preview persists because it is not affected by WinUI3
-                                // focus transitions.
-                                EditorTextBox.Focus(FocusState.Programmatic);
-                                PreviewWebView.Focus(FocusState.Programmatic);
-                            }
-                        }
-                    }
-                }
+                ApplyPreviewSelectionToEditor(messageJson, performFocusDance: true);
                 return;
             }
 
@@ -301,6 +268,57 @@ public sealed partial class MainWindow : Window
         catch
         {
             // Ignore parsing errors from WYSIWYG sync
+        }
+    }
+
+    /// <summary>
+    /// Parses a preview selection message and mirrors the selection into the editor.
+    /// Shared by both <c>selectionChanging</c> (intermediate, no focus dance) and
+    /// <c>selectionChanged</c> (final, with focus dance) message handlers.
+    /// </summary>
+    private void ApplyPreviewSelectionToEditor(string messageJson, bool performFocusDance)
+    {
+        var textStartMarker = "\"text\":\"";
+        var textStart = messageJson.IndexOf(textStartMarker);
+        if (textStart < 0) return;
+
+        textStart += textStartMarker.Length;
+        var textEnd = messageJson.LastIndexOf('"');
+        if (textEnd <= textStart) return;
+
+        var selectedText = messageJson[textStart..textEnd]
+            .Replace("\\n", "\n")
+            .Replace("\\r", "\r")
+            .Replace("\\t", "\t")
+            .Replace("\\\"", "\"")
+            .Replace("\\/", "/")
+            .Replace("\\\\", "\\");
+
+        if (string.IsNullOrEmpty(selectedText)) return;
+
+        var index = EditorTextBox.Text.IndexOf(selectedText, StringComparison.Ordinal);
+        if (index < 0) return;
+
+        // Expand the selection to include surrounding Markdown syntax markers
+        // (e.g. "bold" → "**bold**") so the editor highlights the full formatted
+        // token, not just the visible plain text.
+        var (expandedStart, expandedLength) =
+            MarkdownFormatter.ExpandToMarkdownBounds(EditorTextBox.Text, index, selectedText.Length);
+
+        _syncingSelectionFromPreview = true;
+        EditorTextBox.SelectionStart = expandedStart;
+        EditorTextBox.SelectionLength = expandedLength;
+        _syncingSelectionFromPreview = false;
+
+        if (performFocusDance)
+        {
+            // Briefly focus the editor so WinUI3 transitions through its
+            // Focused→Unfocused visual states and correctly renders
+            // SelectionHighlightColorWhenNotFocused. Return focus to the preview
+            // immediately; WinUI3 batches both focus changes in a single render
+            // frame so there is no visible flicker.
+            EditorTextBox.Focus(FocusState.Programmatic);
+            PreviewWebView.Focus(FocusState.Programmatic);
         }
     }
 
@@ -357,26 +375,6 @@ public sealed partial class MainWindow : Window
         SyncEditorSelectionToPreview();
     }
 
-    /// <summary>
-    /// Strips common inline Markdown syntax characters from <paramref name="text"/> and
-    /// returns the plain visible string that the preview would render.  Used to locate the
-    /// equivalent highlighted region inside the WebView2 content.
-    /// </summary>
-    private static string StripInlineMarkdown(string text)
-    {
-        // Remove bold/italic markers: **, __, *, _
-        text = System.Text.RegularExpressions.Regex.Replace(text, @"\*{1,3}|_{1,3}", string.Empty);
-        // Remove strikethrough: ~~
-        text = System.Text.RegularExpressions.Regex.Replace(text, @"~~", string.Empty);
-        // Remove inline code backticks: `
-        text = text.Replace("`", string.Empty);
-        // Remove heading prefix: # at line start
-        text = System.Text.RegularExpressions.Regex.Replace(text, @"^#{1,6}\s", string.Empty, System.Text.RegularExpressions.RegexOptions.Multiline);
-        // Collapse any leftover whitespace runs introduced by removing syntax
-        text = text.Trim();
-        return text;
-    }
-
     private void SyncEditorSelectionToPreview()
     {
         // Bail out when editor selection is being set programmatically from the preview;
@@ -389,7 +387,7 @@ public sealed partial class MainWindow : Window
             return;
         }
 
-        var plainText = StripInlineMarkdown(EditorTextBox.SelectedText);
+        var plainText = MarkdownFormatter.StripInlineMarkdown(EditorTextBox.SelectedText);
         if (string.IsNullOrEmpty(plainText)) return;
 
         var escaped = JsonSerializer.Serialize(plainText);
