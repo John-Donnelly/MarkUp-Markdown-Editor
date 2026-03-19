@@ -429,6 +429,69 @@ public class MarkdownFormatterTests
         Assert.AreEqual(4, length);
     }
 
+    [TestMethod]
+    public void ExpandToMarkdownBounds_PartialSelection_DoesNotExpand()
+    {
+        // Selecting "bol" inside "**bold**" should NOT expand because "bol"
+        // is not surrounded by matching markers.
+        var (start, length) = MarkdownFormatter.ExpandToMarkdownBounds("**bold**", 2, 3);
+        Assert.AreEqual(2, start);
+        Assert.AreEqual(3, length);
+    }
+
+    [TestMethod]
+    public void ExpandToMarkdownBounds_FullInnerText_ExpandsToIncludeMarkers()
+    {
+        // Selecting "bold" (all inner text) inside "**bold**" should expand to "**bold**"
+        var (start, length) = MarkdownFormatter.ExpandToMarkdownBounds("**bold**", 2, 4);
+        Assert.AreEqual(0, start);
+        Assert.AreEqual(8, length);
+    }
+
+    [TestMethod]
+    public void ExpandToMarkdownBounds_SelectionAtStart_DoesNotExpand()
+    {
+        // Selection starts at document start inside bold — no room for opening marker
+        var (start, length) = MarkdownFormatter.ExpandToMarkdownBounds("bold**", 0, 4);
+        Assert.AreEqual(0, start);
+        Assert.AreEqual(4, length);
+    }
+
+    [TestMethod]
+    public void ExpandToMarkdownBounds_SelectionAtEnd_DoesNotExpand()
+    {
+        // Selection ends at document end — no room for closing marker
+        var (start, length) = MarkdownFormatter.ExpandToMarkdownBounds("**bold", 2, 4);
+        Assert.AreEqual(2, start);
+        Assert.AreEqual(4, length);
+    }
+
+    [TestMethod]
+    public void ExpandToMarkdownBounds_ZeroLengthSelection_ReturnsUnchanged()
+    {
+        var (start, length) = MarkdownFormatter.ExpandToMarkdownBounds("**bold**", 4, 0);
+        Assert.AreEqual(4, start);
+        Assert.AreEqual(0, length);
+    }
+
+    [TestMethod]
+    public void ExpandToMarkdownBounds_StrikethroughFullText_ExpandsCorrectly()
+    {
+        // "text ~~deleted~~ end" — selecting "deleted" should expand to "~~deleted~~"
+        var (start, length) = MarkdownFormatter.ExpandToMarkdownBounds("text ~~deleted~~ end", 7, 7);
+        Assert.AreEqual(5, start);
+        Assert.AreEqual(11, length);
+    }
+
+    [TestMethod]
+    public void ExpandToMarkdownBounds_InlineCodeFullText_ExpandsCorrectly()
+    {
+        // "run `npm install` now" — selecting "npm install" should expand to "`npm install`"
+        var (start, length) = MarkdownFormatter.ExpandToMarkdownBounds("run `npm install` now", 5, 11);
+        Assert.AreEqual(4, start);
+        Assert.AreEqual(13, length);
+    }
+
     // --- ToggleWrap multi-style tests (regression: applying one style previously destroyed another) ---
 
     [TestMethod]
@@ -490,6 +553,88 @@ public class MarkdownFormatterTests
         // This documents the known behaviour: use bold-remove first, then italic-remove.
         var result = MarkdownFormatter.ToggleItalic("***hello***", 0, 11);
         Assert.AreEqual("****hello****", result.NewText);
+    }
+
+    // ── StripInlineMarkdown ───────────────────────────────────────────────────
+
+    [TestMethod]
+    public void StripInlineMarkdown_PlainText_ReturnsUnchanged()
+    {
+        Assert.AreEqual("Hello world", MarkdownFormatter.StripInlineMarkdown("Hello world"));
+    }
+
+    [TestMethod]
+    public void StripInlineMarkdown_BoldAsterisks_RemovesMarkers()
+    {
+        Assert.AreEqual("bold", MarkdownFormatter.StripInlineMarkdown("**bold**"));
+    }
+
+    [TestMethod]
+    public void StripInlineMarkdown_ItalicAsterisks_RemovesMarkers()
+    {
+        Assert.AreEqual("italic", MarkdownFormatter.StripInlineMarkdown("*italic*"));
+    }
+
+    [TestMethod]
+    public void StripInlineMarkdown_BoldItalicAsterisks_RemovesMarkers()
+    {
+        Assert.AreEqual("bold italic", MarkdownFormatter.StripInlineMarkdown("***bold italic***"));
+    }
+
+    [TestMethod]
+    public void StripInlineMarkdown_BoldUnderscores_RemovesMarkers()
+    {
+        Assert.AreEqual("bold", MarkdownFormatter.StripInlineMarkdown("__bold__"));
+    }
+
+    [TestMethod]
+    public void StripInlineMarkdown_ItalicUnderscores_RemovesMarkers()
+    {
+        Assert.AreEqual("italic", MarkdownFormatter.StripInlineMarkdown("_italic_"));
+    }
+
+    [TestMethod]
+    public void StripInlineMarkdown_Strikethrough_RemovesMarkers()
+    {
+        Assert.AreEqual("strike", MarkdownFormatter.StripInlineMarkdown("~~strike~~"));
+    }
+
+    [TestMethod]
+    public void StripInlineMarkdown_InlineCode_RemovesBackticks()
+    {
+        Assert.AreEqual("code", MarkdownFormatter.StripInlineMarkdown("`code`"));
+    }
+
+    [TestMethod]
+    public void StripInlineMarkdown_HeadingPrefix_RemovesHash()
+    {
+        Assert.AreEqual("Heading", MarkdownFormatter.StripInlineMarkdown("## Heading"));
+    }
+
+    [TestMethod]
+    public void StripInlineMarkdown_EmptyString_ReturnsEmpty()
+    {
+        Assert.AreEqual(string.Empty, MarkdownFormatter.StripInlineMarkdown(string.Empty));
+    }
+
+    [TestMethod]
+    public void StripInlineMarkdown_NullString_ReturnsEmpty()
+    {
+        Assert.AreEqual(string.Empty, MarkdownFormatter.StripInlineMarkdown(null!));
+    }
+
+    [TestMethod]
+    public void StripInlineMarkdown_MixedFormatting_RemovesAllMarkers()
+    {
+        // "**bold** and *italic*" → "bold and italic"
+        Assert.AreEqual("bold and italic", MarkdownFormatter.StripInlineMarkdown("**bold** and *italic*"));
+    }
+
+    [TestMethod]
+    public void StripInlineMarkdown_NestedBoldItalic_RemovesAllMarkers()
+    {
+        // "**_nested_**" → "nested"
+        Assert.AreEqual("nested", MarkdownFormatter.StripInlineMarkdown("**_nested_**"));
     }
 }
 

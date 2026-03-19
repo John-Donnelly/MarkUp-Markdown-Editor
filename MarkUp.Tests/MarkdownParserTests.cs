@@ -777,7 +777,7 @@ public class MarkdownParserTests
         // WebView2 focus state (unlike the browser's native DOM selection).
         var result = MarkdownParser.ToHtml("Hello", editable: true);
         Assert.IsTrue(result.Contains("requestAnimationFrame"));
-        Assert.IsTrue(result.Contains("highlightAF"));
+        Assert.IsTrue(result.Contains("selectionAF"));
     }
 
     [TestMethod]
