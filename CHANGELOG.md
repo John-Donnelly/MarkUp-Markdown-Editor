@@ -2,6 +2,40 @@
 
 All notable changes to MarkUp Markdown Editor will be documented in this file.
 
+## [1.5.1] - 2025-07-14
+
+### Fixed
+- **Real-time preview-to-editor content sync**: Reduced the JavaScript `notifyChange`
+  debounce from 400 ms to 100 ms so that typing in the contentEditable preview pane
+  updates the Markdown editor almost immediately instead of lagging by nearly half a
+  second after the user stops typing.
+- **Character-by-character bidirectional selection mirroring**: Merged the CSS Custom
+  Highlight update and the C# host notification into a single `requestAnimationFrame`
+  callback.  During a pointer drag in the preview, intermediate `selectionChanging`
+  messages are posted every animation frame so the editor selection tracks
+  character-by-character.  A deferred `selectionChanged` message fires 100 ms after
+  the selection stabilises (or immediately on `pointerup`) to trigger the WinUI3 focus
+  dance that activates `SelectionHighlightColorWhenNotFocused`.  Previously the C#
+  host was only notified via a 200 ms debounce that reset on every `selectionchange`
+  event, which meant the editor selection never updated during an active drag.
+
+### Changed
+- `MarkdownFormatter.StripInlineMarkdown` is now a public utility method (moved from
+  a private helper in `MainWindow.xaml.cs`) for reuse and testability.
+- `ApplyPreviewSelectionToEditor` helper method extracted in `MainWindow.xaml.cs` to
+  share JSON parsing and selection-mapping logic between intermediate and final
+  selection message handlers.
+- Editable-preview JS variables renamed: `highlightAF` / `selectionDebounce` →
+  `selectionAF` / `selectionFinalTimer` to better reflect the merged selection flow.
+
+### Tests
+- 13 new unit tests for `MarkdownFormatter.StripInlineMarkdown` covering plain text,
+  bold, italic, bold+italic, underscores, strikethrough, inline code, headings,
+  empty/null, mixed formatting, and nested markers.
+- 8 new edge-case unit tests for `MarkdownFormatter.ExpandToMarkdownBounds`: partial
+  selection inside formatted text, full inner text expansion, boundary conditions
+  (start/end of document), zero-length selection, strikethrough, and inline code.
+
 ## [1.5.0] - 2025-06-19
 
 ### Added
