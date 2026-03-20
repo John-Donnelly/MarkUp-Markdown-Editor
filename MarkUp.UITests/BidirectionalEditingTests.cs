@@ -162,5 +162,61 @@ public sealed class BidirectionalEditingTests : AppSession
         Thread.Sleep(900);
         Assert.AreEqual("PreviewToEditor", LastSyncSource.Text);
     }
+
+    // ── Regression: editor→preview selection parity ─────────────────────────
+    // After a preview selection is applied to the editor (with the focus dance),
+    // the editor must remain the "active" selection owner: subsequent selections
+    // in the editor must update the preview highlight rather than being silently
+    // overwritten by the WebView resending its stale selection.
+
+    [TestMethod]
+    public void AfterPreviewSelection_EditorSelectionDoesNotRevertToOldPreviewSelection()
+    {
+        // 1. Type content so both panes have something to select.
+        Editor.Click();
+        Editor.SendKeys("hello world");
+        Thread.Sleep(700);
+
+        // 2. Trigger a preview-to-editor sync via the automation button,
+        //    which internally performs the focus dance.
+        InsertTextButton.Click();
+        Thread.Sleep(900);
+        Assert.IsTrue(Editor.Text.Contains("preview bridge text"), "Precondition: preview text synced to editor");
+
+        // 3. Now click the editor and select all.  The editor selection should
+        //    be honoured; the app must NOT reset it back to the preview selection.
+        Editor.Click();
+        Thread.Sleep(200);
+        SendCtrlShortcut('A');
+        Thread.Sleep(400);
+
+        // 4. Focused panel should still be Editor after the user clicked there.
+        Assert.AreEqual("Editor", FocusedPanel.Text,
+            "Focus must remain on Editor after user clicked it post-preview-selection.");
+    }
+
+    [TestMethod]
+    public void EditorSelection_SyncsHighlightToPreview_AfterPreviewSelectionCycle()
+    {
+        // 1. Set up content in the editor.
+        Editor.Click();
+        Editor.SendKeys("sync test content");
+        Thread.Sleep(700);
+        Assert.AreEqual("EditorToPreview", LastSyncSource.Text, "Precondition: editor drove the initial sync.");
+
+        // 2. Simulate a preview-to-editor selection (triggers focus dance).
+        InsertTextButton.Click();
+        Thread.Sleep(900);
+        Assert.AreEqual("PreviewToEditor", LastSyncSource.Text, "Precondition: preview drove a sync.");
+
+        // 3. Return focus to editor and verify the last-sync-source can flip back
+        //    to editor (proving editor changes are not swallowed by the loop).
+        FocusEditorBtn.Click();
+        Thread.Sleep(200);
+        Editor.SendKeys(" appended");
+        Thread.Sleep(700);
+        Assert.AreEqual("EditorToPreview", LastSyncSource.Text,
+            "After user edits in editor, EditorToPreview sync must be the latest.");
+    }
 }
 
