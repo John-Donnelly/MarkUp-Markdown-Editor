@@ -636,5 +636,349 @@ public class MarkdownFormatterTests
         // "**_nested_**" → "nested"
         Assert.AreEqual("nested", MarkdownFormatter.StripInlineMarkdown("**_nested_**"));
     }
+
+    // ── Preview highlight round-trip: formatting → selection → strip → highlight text ──
+    // These tests verify the full editor→preview selection-sync path.
+    // When a formatting button is pressed with text selected, ApplyFormatting wraps the text
+    // (e.g. "word" → "**word**") and leaves the full wrapped token selected.
+    // SyncEditorSelectionToPreview then calls StripInlineMarkdown on the selection to obtain
+    // the plain text to pass to highlightText() in the preview.
+    // The stripped result must equal the original plain word so the preview can highlight it.
+
+    [TestMethod]
+    public void ToggleBold_StrippedNewSelectionMatchesOriginalPlainText()
+    {
+        // Wrapping "word" → "**word**"; stripping the result must give back "word"
+        var result = MarkdownFormatter.ToggleBold("word", 0, 4);
+        Assert.AreEqual("**word**", result.NewText.Substring(result.NewSelectionStart, result.NewSelectionLength));
+        Assert.AreEqual("word", MarkdownFormatter.StripInlineMarkdown(
+            result.NewText.Substring(result.NewSelectionStart, result.NewSelectionLength)));
+    }
+
+    [TestMethod]
+    public void ToggleItalic_StrippedNewSelectionMatchesOriginalPlainText()
+    {
+        var result = MarkdownFormatter.ToggleItalic("word", 0, 4);
+        Assert.AreEqual("word", MarkdownFormatter.StripInlineMarkdown(
+            result.NewText.Substring(result.NewSelectionStart, result.NewSelectionLength)));
+    }
+
+    [TestMethod]
+    public void ToggleStrikethrough_StrippedNewSelectionMatchesOriginalPlainText()
+    {
+        var result = MarkdownFormatter.ToggleStrikethrough("word", 0, 4);
+        Assert.AreEqual("word", MarkdownFormatter.StripInlineMarkdown(
+            result.NewText.Substring(result.NewSelectionStart, result.NewSelectionLength)));
+    }
+
+    [TestMethod]
+    public void ToggleInlineCode_StrippedNewSelectionMatchesOriginalPlainText()
+    {
+        var result = MarkdownFormatter.ToggleInlineCode("word", 0, 4);
+        Assert.AreEqual("word", MarkdownFormatter.StripInlineMarkdown(
+            result.NewText.Substring(result.NewSelectionStart, result.NewSelectionLength)));
+    }
+
+    [TestMethod]
+    public void ToggleBold_MidSentence_StrippedNewSelectionMatchesOriginalPlainText()
+    {
+        // Ensure the logic holds for a selection that is not at position 0
+        var result = MarkdownFormatter.ToggleBold("Hello world end", 6, 5);
+        Assert.AreEqual("**world**", result.NewText.Substring(result.NewSelectionStart, result.NewSelectionLength));
+        Assert.AreEqual("world", MarkdownFormatter.StripInlineMarkdown(
+            result.NewText.Substring(result.NewSelectionStart, result.NewSelectionLength)));
+    }
+
+    [TestMethod]
+    public void ToggleBold_NewSelectionCoversFullWrappedToken()
+    {
+        // After wrapping, selection must span the markers too so the editor shows the full token highlighted
+        var result = MarkdownFormatter.ToggleBold("click", 0, 5);
+        Assert.AreEqual(0, result.NewSelectionStart);
+        Assert.AreEqual("**click**".Length, result.NewSelectionLength);
+    }
+
+    [TestMethod]
+    public void ToggleItalic_NewSelectionCoversFullWrappedToken()
+    {
+        var result = MarkdownFormatter.ToggleItalic("click", 0, 5);
+        Assert.AreEqual(0, result.NewSelectionStart);
+        Assert.AreEqual("*click*".Length, result.NewSelectionLength);
+    }
+
+    [TestMethod]
+    public void ToggleStrikethrough_NewSelectionCoversFullWrappedToken()
+    {
+        var result = MarkdownFormatter.ToggleStrikethrough("click", 0, 5);
+        Assert.AreEqual(0, result.NewSelectionStart);
+        Assert.AreEqual("~~click~~".Length, result.NewSelectionLength);
+    }
+
+    [TestMethod]
+    public void ToggleInlineCode_NewSelectionCoversFullWrappedToken()
+    {
+        var result = MarkdownFormatter.ToggleInlineCode("click", 0, 5);
+        Assert.AreEqual(0, result.NewSelectionStart);
+        Assert.AreEqual("`click`".Length, result.NewSelectionLength);
+    }
+
+    // ── StripInlineMarkdown: block-level prefix behaviour ──────────────────────
+    // StripInlineMarkdown strips inline markers only (**, *, ~~, `, #).
+    // Block-level prefixes (- , 1. , > ) are intentionally preserved because
+    // they appear at line start and are not inline syntax.  This means
+    // SyncEditorSelectionToPreview may fail to match list/blockquote content in
+    // the preview DOM when the selection includes its prefix — a known gap that
+    // does not affect normal word-level selections inside such blocks.
+
+    [TestMethod]
+    public void StripInlineMarkdown_UnorderedListPrefix_PreservesPrefix()
+    {
+        Assert.AreEqual("- item", MarkdownFormatter.StripInlineMarkdown("- item"));
+    }
+
+    [TestMethod]
+    public void StripInlineMarkdown_OrderedListPrefix_PreservesPrefix()
+    {
+        Assert.AreEqual("1. item", MarkdownFormatter.StripInlineMarkdown("1. item"));
+    }
+
+    [TestMethod]
+    public void StripInlineMarkdown_BlockquotePrefix_PreservesPrefix()
+    {
+        Assert.AreEqual("> quote", MarkdownFormatter.StripInlineMarkdown("> quote"));
+    }
+
+    // When the user selects only syntax markers (e.g. just "**") StripInlineMarkdown
+    // returns empty string.  SyncEditorSelectionToPreview guards this case with an
+    // early return so no partial highlight is attempted in the preview.
+    [TestMethod]
+    public void StripInlineMarkdown_OnlyBoldMarkers_ReturnsEmpty()
+    {
+        Assert.AreEqual(string.Empty, MarkdownFormatter.StripInlineMarkdown("**"));
+    }
+
+    [TestMethod]
+    public void StripInlineMarkdown_OnlyStrikethroughMarkers_ReturnsEmpty()
+    {
+        Assert.AreEqual(string.Empty, MarkdownFormatter.StripInlineMarkdown("~~"));
+    }
+
+    // ── ExpandToMarkdownBounds round-trip: preview selects plain text → editor expands to full token ──
+    // When the user selects a plain word in the preview, ApplyPreviewSelectionToEditor calls
+    // ExpandToMarkdownBounds to widen the editor selection to include surrounding markers.
+    // After unwrapping (toggling off), the markers are gone, so expansion must not occur.
+
+    [TestMethod]
+    public void ExpandToMarkdownBounds_AfterUnwrapBold_PlainTextDoesNotExpand()
+    {
+        // Unwrap: "**word**" → "word"; now plain "word" has no markers to expand into
+        var unwrapped = MarkdownFormatter.ToggleBold("**word**", 0, 8).NewText;
+        Assert.AreEqual("word", unwrapped);
+        var (start, length) = MarkdownFormatter.ExpandToMarkdownBounds(unwrapped, 0, 4);
+        Assert.AreEqual(0, start);
+        Assert.AreEqual(4, length);
+    }
+
+    [TestMethod]
+    public void ExpandToMarkdownBounds_AfterUnwrapItalic_PlainTextDoesNotExpand()
+    {
+        var unwrapped = MarkdownFormatter.ToggleItalic("*word*", 0, 6).NewText;
+        Assert.AreEqual("word", unwrapped);
+        var (start, length) = MarkdownFormatter.ExpandToMarkdownBounds(unwrapped, 0, 4);
+        Assert.AreEqual(0, start);
+        Assert.AreEqual(4, length);
+    }
+
+    // ── StripInlineMarkdown newline normalisation ──
+    // StripInlineMarkdown must output a single '\n' at block boundaries so the result
+    // can be passed directly to highlightText() in the preview, which mirrors sel.toString().
+
+    [TestMethod]
+    public void StripInlineMarkdown_DoubleParagraphNewline_CollapsesToSingleNewline()
+    {
+        // Editor text between two paragraphs has '\n\n'; the preview DOM produces '\n'.
+        Assert.AreEqual("hello\nworld", MarkdownFormatter.StripInlineMarkdown("hello\n\nworld"));
+    }
+
+    [TestMethod]
+    public void StripInlineMarkdown_MultipleNewlines_CollapsesToSingleNewline()
+    {
+        Assert.AreEqual("a\nb", MarkdownFormatter.StripInlineMarkdown("a\n\n\nb"));
+    }
+
+    [TestMethod]
+    public void StripInlineMarkdown_FormattedMultiLine_StripsMarkersAndNormalisesNewlines()
+    {
+        // "**bold**\n\nplain" → "bold\nplain"
+        Assert.AreEqual("bold\nplain", MarkdownFormatter.StripInlineMarkdown("**bold**\n\nplain"));
+    }
+
+    [TestMethod]
+    public void StripInlineMarkdown_CrLfNewlines_NormalisedToLf()
+    {
+        Assert.AreEqual("a\nb", MarkdownFormatter.StripInlineMarkdown("a\r\nb"));
+    }
+
+    // ── FindPreviewTextInEditor — Preview→Editor direction ──
+    // These tests verify that plain text from sel.toString() is correctly located
+    // inside the raw markdown, with all newline normalisation variants handled.
+
+    [TestMethod]
+    public void FindPreviewTextInEditor_ExactMatch_ReturnsCorrectIndex()
+    {
+        var (idx, len) = MarkdownFormatter.FindPreviewTextInEditor("Hello world", "world");
+        Assert.AreEqual(6, idx);
+        Assert.AreEqual(5, len);
+    }
+
+    [TestMethod]
+    public void FindPreviewTextInEditor_NotFound_ReturnsMinusOne()
+    {
+        var (idx, _) = MarkdownFormatter.FindPreviewTextInEditor("Hello world", "missing");
+        Assert.AreEqual(-1, idx);
+    }
+
+    [TestMethod]
+    public void FindPreviewTextInEditor_PlainTextInsideBoldMarkers_ReturnsInnerIndex()
+    {
+        // Editor: "**bold**"; preview sel.toString(): "bold"
+        // IndexOf("bold") finds it at offset 2 inside the ** markers.
+        var (idx, len) = MarkdownFormatter.FindPreviewTextInEditor("**bold**", "bold");
+        Assert.AreEqual(2, idx);
+        Assert.AreEqual(4, len);
+    }
+
+    [TestMethod]
+    public void FindPreviewTextInEditor_SingleNewlineExpandsToDoubleNewline()
+    {
+        // sel.toString() emits '\n' at paragraph boundary;
+        // editor markdown has '\n\n' between paragraphs.
+        var editor = "first\n\nsecond";
+        var (idx, len) = MarkdownFormatter.FindPreviewTextInEditor(editor, "first\nsecond");
+        Assert.AreEqual(0, idx);
+        Assert.AreEqual("first\n\nsecond".Length, len);
+    }
+
+    [TestMethod]
+    public void FindPreviewTextInEditor_SingleNewlineExpansion_LengthCoversDoubleNewline()
+    {
+        // matchedLength must span the '\n\n' in the editor, not just the '\n' in preview text
+        var editor = "para one\n\npara two";
+        var (idx, len) = MarkdownFormatter.FindPreviewTextInEditor(editor, "para one\npara two");
+        Assert.AreEqual(0, idx);
+        Assert.AreEqual(editor.Length, len);
+    }
+
+    [TestMethod]
+    public void FindPreviewTextInEditor_CrLfEditor_MatchesSingleLfPreview()
+    {
+        // Editor stored with '\r\n' line endings; preview gives '\n'
+        var editor = "line one\r\n\r\nline two";
+        var (idx, len) = MarkdownFormatter.FindPreviewTextInEditor(editor, "line one\nline two");
+        Assert.IsTrue(idx >= 0, "Should find text despite CRLF in editor");
+    }
+
+    [TestMethod]
+    public void FindPreviewTextInEditor_EmptyPreviewText_ReturnsZeroIndex()
+    {
+        // Empty string always found at position 0 by IndexOf semantics
+        var (idx, len) = MarkdownFormatter.FindPreviewTextInEditor("anything", string.Empty);
+        Assert.AreEqual(0, idx);
+    }
+
+    // ── ExpandToMarkdownBounds round-trip for cross-block selections ──
+
+    [TestMethod]
+    public void ExpandToMarkdownBounds_PlainTextAcrossBlocks_NoExpansion()
+    {
+        // "hello\n\nworld" — no inline markers; expansion should leave bounds unchanged
+        var editor = "hello\n\nworld";
+        var (idx, len) = MarkdownFormatter.FindPreviewTextInEditor(editor, "hello\nworld");
+        var (start, length) = MarkdownFormatter.ExpandToMarkdownBounds(editor, idx, len);
+        Assert.AreEqual(0, start);
+        Assert.AreEqual(editor.Length, length);
+    }
+
+    [TestMethod]
+    public void ExpandToMarkdownBounds_BoldWordFoundByPreviewText_ExpandsToIncludeMarkers()
+    {
+        // Editor: "**bold**"; preview: "bold"; index found at 2; expand → 0..8
+        var editor = "**bold**";
+        var (idx, len) = MarkdownFormatter.FindPreviewTextInEditor(editor, "bold");
+        var (start, length) = MarkdownFormatter.ExpandToMarkdownBounds(editor, idx, len);
+        Assert.AreEqual(0, start);
+        Assert.AreEqual(8, length);
+    }
+
+    [TestMethod]
+    public void StripInlineMarkdown_ThenFindInEditor_RoundTrip_SingleWord()
+    {
+        // Single bold word: strip "**bold**" → "bold", then find "bold" in editor.
+        // FindPreviewTextInEditor locates "bold" at offset 2 (inside **), then
+        // ExpandToMarkdownBounds widens to cover the full "**bold**" token.
+        var editorSelection = "**bold**";
+        var stripped = MarkdownFormatter.StripInlineMarkdown(editorSelection);
+        Assert.AreEqual("bold", stripped);
+        var fullEditor = "Normal text\n\n**bold** and more\n\nEnd";
+        var (idx, len) = MarkdownFormatter.FindPreviewTextInEditor(fullEditor, stripped);
+        Assert.IsTrue(idx >= 0, "Plain word should be found inside bold markers in editor");
+        // Expanding from the matched plain-text position should cover the ** markers
+        var (start, length) = MarkdownFormatter.ExpandToMarkdownBounds(fullEditor, idx, len);
+        Assert.AreEqual("**bold**", fullEditor.Substring(start, length));
+    }
+
+    [TestMethod]
+    public void StripInlineMarkdown_ThenFindInEditor_RoundTrip_MultiParagraph()
+    {
+        // Selecting across two plain paragraphs: editor '\n\n' normalises to '\n'.
+        // FindPreviewTextInEditor must expand '\n' back to '\n\n' to find the match.
+        var editorSelection = "end of para\n\nstart of next";
+        var stripped = MarkdownFormatter.StripInlineMarkdown(editorSelection);
+        Assert.AreEqual("end of para\nstart of next", stripped);
+        var fullEditor = "intro\n\nend of para\n\nstart of next\n\noutro";
+        var (idx, len) = MarkdownFormatter.FindPreviewTextInEditor(fullEditor, stripped);
+        Assert.IsTrue(idx >= 0, "Multi-paragraph stripped text should be found");
+        // The matched span in the editor must include the double newline
+        Assert.IsTrue(fullEditor.Substring(idx, len).Contains("\n\n"));
+    }
+
+    // ── SyncPreviewToEditor regression: plain IndexOf vs FindPreviewTextInEditor ──
+
+    [TestMethod]
+    public void SyncPreviewToEditorPath_CrossParagraphSelection_PlainIndexOfWouldFail()
+    {
+        // Preview sel.toString() returns single \n between paragraphs;
+        // editor markdown uses \n\n — plain IndexOf must return -1 for this case.
+        var editorText = "first paragraph\n\nsecond paragraph";
+        var previewText = "first paragraph\nsecond paragraph";
+
+        Assert.AreEqual(-1, editorText.IndexOf(previewText, StringComparison.Ordinal),
+            "Plain IndexOf must not find the cross-paragraph selection (confirms the bug existed).");
+
+        var (idx, len) = MarkdownFormatter.FindPreviewTextInEditor(editorText, previewText);
+        Assert.IsTrue(idx >= 0, "FindPreviewTextInEditor must resolve the cross-paragraph selection.");
+        Assert.AreEqual(0, idx);
+        Assert.AreEqual(editorText.Length, len);
+
+        var (start, length) = MarkdownFormatter.ExpandToMarkdownBounds(editorText, idx, len);
+        Assert.AreEqual(0, start);
+        Assert.AreEqual(editorText.Length, length, "Plain text selection bounds must not change after expand.");
+    }
+
+    [TestMethod]
+    public void SyncPreviewToEditorPath_BoldWordSelection_ExpandsToIncludeMarkers()
+    {
+        // Preview sel.toString() returns plain word; ExpandToMarkdownBounds must
+        // widen the selection to cover the surrounding ** markers.
+        var editorText = "prefix **bold word** suffix";
+        var previewText = "bold word";
+
+        var (idx, len) = MarkdownFormatter.FindPreviewTextInEditor(editorText, previewText);
+        Assert.IsTrue(idx >= 0, "FindPreviewTextInEditor must locate the plain word inside editor.");
+
+        var (start, length) = MarkdownFormatter.ExpandToMarkdownBounds(editorText, idx, len);
+        Assert.AreEqual("**bold word**", editorText.Substring(start, length),
+            "Selection must expand to include surrounding ** markers.");
+    }
 }
 
