@@ -402,6 +402,15 @@ public static partial class MarkdownParser
   var debounceTimer;
   var selectionAF;
   var selectionFinalTimer;
+  // When true, the selectionchange RAF skips both highlightText() and postMessage().
+  // Set by suppressSelectionMessages() before the C# focus dance so the dance does
+  // not re-send the old preview selection and restart the loop.
+  // Cleared when the user physically interacts with the preview (pointerdown/keydown).
+  var _awaitingUserInput = false;
+
+  function suppressSelectionMessages() {
+    _awaitingUserInput = true;
+  }
 
   // Called by C# host to update content without triggering a round-trip sync.
   function updateContent(html) {
@@ -420,7 +429,32 @@ public static partial class MarkdownParser
     }, 100);
   }
 
+  // Block-level elements whose boundaries sel.toString() represents as '\n'.
+  // We insert the same separator when building the flat text map so that
+  // indexOf(strippedEditorText) finds the correct position even when the
+  // selection spans multiple paragraphs, list items or headings.
+  var _blockTags = new Set(['P','H1','H2','H3','H4','H5','H6','LI','BLOCKQUOTE','PRE','TR','DIV']);
+
+  // Returns true when node is the first text node inside a block-level element
+  // that is a sibling or descendant of a prior block — i.e. when sel.toString()
+  // would have emitted a '\n' before this node's text.
+  function _needsBlockSep(node, prevNode) {
+    if (!prevNode) return false;
+    // Walk up from prevNode to find its nearest block ancestor inside editor-body.
+    var body = document.getElementById('editor-body');
+    function blockAncestor(n) {
+      while (n && n !== body) {
+        if (n.nodeType === 1 && _blockTags.has(n.tagName)) return n;
+        n = n.parentNode;
+      }
+      return null;
+    }
+    return blockAncestor(node) !== blockAncestor(prevNode);
+  }
+
   // Called by C# host to highlight plain text in the preview that mirrors the editor selection.
+  // 'text' is the result of StripInlineMarkdown on the editor's SelectedText, with '\n'
+  // separating lines exactly as sel.toString() would for multi-block selections.
   function highlightText(text) {
     if (typeof CSS !== 'undefined' && CSS.highlights) {
       CSS.highlights.delete('sync-highlight');
@@ -428,34 +462,72 @@ public static partial class MarkdownParser
     if (!text || text.length === 0) return;
     var body = document.getElementById('editor-body');
     if (!body) return;
+
+    // Build a flat text map that mirrors the string sel.toString() would produce:
+    // text node content is concatenated, with '\n' inserted at each block boundary.
     var textNodes = [];
-    var walker = document.createTreeWalker(body, NodeFilter.SHOW_TEXT, null);
-    while (walker.nextNode()) { textNodes.push(walker.currentNode); }
-    var fullText = '';
     var nodeOffsets = [];
-    for (var i = 0; i < textNodes.length; i++) {
-      nodeOffsets.push(fullText.length);
-      fullText += textNodes[i].textContent;
+    var fullText = '';
+    var prevNode = null;
+    var walker = document.createTreeWalker(body, NodeFilter.SHOW_TEXT, null);
+    while (walker.nextNode()) {
+      var tn = walker.currentNode;
+      // Skip whitespace-only nodes that are purely structural (e.g. newlines in HTML source)
+      if (tn.textContent.trim() === '' && tn.parentNode && tn.parentNode.tagName === 'BODY') {
+        continue;
+      }
+      if (_needsBlockSep(tn, prevNode)) {
+        // Record a synthetic '\n' separator — it is not part of any real text node
+        // so we represent it as offset entry with nodeIndex = -1 (sentinel).
+        nodeOffsets.push({ start: fullText.length, len: 1, nodeIdx: -1 });
+        fullText += '\n';
+      }
+      nodeOffsets.push({ start: fullText.length, len: tn.textContent.length, nodeIdx: textNodes.length });
+      fullText += tn.textContent;
+      textNodes.push(tn);
+      prevNode = tn;
     }
+
     var startIdx = fullText.indexOf(text);
     if (startIdx < 0) return;
     var endIdx = startIdx + text.length;
-    var startNode = null, startOffset = 0, endNode = null, endOffset = 0;
-    for (var i = 0; i < textNodes.length; i++) {
-      var ns = nodeOffsets[i];
-      var ne = ns + textNodes[i].textContent.length;
-      if (startNode === null && startIdx >= ns && startIdx <= ne) {
-        startNode = textNodes[i]; startOffset = startIdx - ns;
+
+    // Resolve character positions back to (textNode, offset) pairs, skipping
+    // synthetic separator entries (nodeIdx === -1).
+    function resolvePos(charIdx) {
+      for (var j = 0; j < nodeOffsets.length; j++) {
+        var entry = nodeOffsets[j];
+        if (entry.nodeIdx === -1) continue; // synthetic newline separator
+        if (charIdx >= entry.start && charIdx <= entry.start + entry.len) {
+          return { node: textNodes[entry.nodeIdx], offset: charIdx - entry.start };
+        }
       }
-      if (endNode === null && endIdx >= ns && endIdx <= ne) {
-        endNode = textNodes[i]; endOffset = endIdx - ns; break;
-      }
+      return null;
     }
-    if (startNode && endNode && typeof CSS !== 'undefined' && CSS.highlights) {
+
+    // For the end position: if it lands exactly on a synthetic separator or the
+    // start of the next entry, snap back to the end of the previous real node.
+    function resolveEndPos(charIdx) {
+      var result = resolvePos(charIdx);
+      if (result) return result;
+      // charIdx is on a synthetic '\n' — use end of preceding real text node
+      for (var j = nodeOffsets.length - 1; j >= 0; j--) {
+        var entry = nodeOffsets[j];
+        if (entry.nodeIdx === -1) continue;
+        if (entry.start + entry.len <= charIdx) {
+          return { node: textNodes[entry.nodeIdx], offset: entry.len };
+        }
+      }
+      return null;
+    }
+
+    var startPos = resolvePos(startIdx);
+    var endPos = resolveEndPos(endIdx);
+    if (startPos && endPos && typeof CSS !== 'undefined' && CSS.highlights) {
       try {
         var range = new Range();
-        range.setStart(startNode, startOffset);
-        range.setEnd(endNode, endOffset);
+        range.setStart(startPos.node, startPos.offset);
+        range.setEnd(endPos.node, endPos.offset);
         CSS.highlights.set('sync-highlight', new Highlight(range));
       } catch(e) {}
     }
@@ -478,31 +550,43 @@ public static partial class MarkdownParser
         var sel = window.getSelection();
         if (sel && !sel.isCollapsed && sel.rangeCount > 0) {
           var text = sel.toString();
-          highlightText(text);
-          if (text && text.length > 0 && document.hasFocus()) {
-            window.chrome.webview.postMessage(JSON.stringify({ type: 'selectionChanging', text: text }));
-            // Schedule a final notification after the selection stabilises
-            clearTimeout(selectionFinalTimer);
-            selectionFinalTimer = setTimeout(function() {
-              if (!document.hasFocus()) return;
-              var s = window.getSelection();
-              if (!s || s.isCollapsed || s.rangeCount === 0) return;
-              var t = s.toString();
-              if (t && t.length > 0) {
-                window.chrome.webview.postMessage(JSON.stringify({ type: 'selectionChanged', text: t }));
-              }
-            }, 100);
+          if (!_awaitingUserInput) {
+            highlightText(text);
+            if (text && text.length > 0 && document.hasFocus()) {
+              window.chrome.webview.postMessage(JSON.stringify({ type: 'selectionChanging', text: text }));
+              // Schedule a final notification after the selection stabilises
+              clearTimeout(selectionFinalTimer);
+              selectionFinalTimer = setTimeout(function() {
+                if (!document.hasFocus()) return;
+                if (_awaitingUserInput) return;
+                var s = window.getSelection();
+                if (!s || s.isCollapsed || s.rangeCount === 0) return;
+                var t = s.toString();
+                if (t && t.length > 0) {
+                  window.chrome.webview.postMessage(JSON.stringify({ type: 'selectionChanged', text: t }));
+                }
+              }, 100);
+            }
           }
         } else {
-          highlightText('');
+          if (!_awaitingUserInput) highlightText('');
         }
       });
     });
+    // Re-enable selection messages when the user physically interacts with the
+    // preview pane.  pointerdown fires before selectionchange for click-to-select,
+    // so messages are restored before the first selection event of the new gesture.
+    document.addEventListener('pointerdown', function() { _awaitingUserInput = false; });
+    document.addEventListener('keydown', function() { _awaitingUserInput = false; });
     // Send final selection on pointerup immediately — clears the deferred timer
     // so the focus dance happens exactly once at the end of a pointer drag.
+    // Must check _awaitingUserInput: pointerdown already cleared it, but the
+    // focus-dance suppression may still be active if pointerup fires on the
+    // same gesture that the C# host used to set _awaitingUserInput = true.
     document.addEventListener('pointerup', function() {
       clearTimeout(selectionFinalTimer);
       if (selectionAF) cancelAnimationFrame(selectionAF);
+      if (_awaitingUserInput) return;
       var s = window.getSelection();
       if (!s || s.isCollapsed || s.rangeCount === 0) return;
       var t = s.toString();
