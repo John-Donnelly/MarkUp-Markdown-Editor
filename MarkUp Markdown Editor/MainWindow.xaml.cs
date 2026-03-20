@@ -74,6 +74,12 @@ public sealed partial class MainWindow : Window
             new Microsoft.UI.Xaml.Media.SolidColorBrush(
                 Microsoft.UI.ColorHelper.FromArgb(100, 0, 120, 215));
 
+        // Force IBeam cursor over the entire TextBox area — including empty lines and
+        // padding — so the user can click anywhere to position the caret and start a
+        // selection.  Without this, WinUI3 shows the default Arrow cursor outside the
+        // rendered text characters, which prevents selection from those areas.
+        EditorTextBox.ChangeCursor(InputSystemCursorShape.IBeam);
+
         // Set up debounced preview timer
         _previewTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(300) };
         _previewTimer.Tick += PreviewTimer_Tick;
@@ -175,7 +181,7 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private void CoreWebView2_WebMessageReceived(Microsoft.Web.WebView2.Core.CoreWebView2 sender, Microsoft.Web.WebView2.Core.CoreWebView2WebMessageReceivedEventArgs args)
+    private async void CoreWebView2_WebMessageReceived(Microsoft.Web.WebView2.Core.CoreWebView2 sender, Microsoft.Web.WebView2.Core.CoreWebView2WebMessageReceivedEventArgs args)
     {
         try
         {
@@ -213,7 +219,7 @@ public sealed partial class MainWindow : Window
             // dance so the highlight tracks character-by-character during drag.
             if (messageJson.Contains("selectionChanging"))
             {
-                ApplyPreviewSelectionToEditor(messageJson, performFocusDance: false);
+                await ApplyPreviewSelectionToEditor(messageJson, performFocusDance: false);
                 return;
             }
 
@@ -223,7 +229,7 @@ public sealed partial class MainWindow : Window
             // SelectionHighlightColorWhenNotFocused correctly.
             if (messageJson.Contains("selectionChanged"))
             {
-                ApplyPreviewSelectionToEditor(messageJson, performFocusDance: true);
+                await ApplyPreviewSelectionToEditor(messageJson, performFocusDance: true);
                 return;
             }
 
@@ -276,42 +282,55 @@ public sealed partial class MainWindow : Window
     /// Shared by both <c>selectionChanging</c> (intermediate, no focus dance) and
     /// <c>selectionChanged</c> (final, with focus dance) message handlers.
     /// </summary>
-    private void ApplyPreviewSelectionToEditor(string messageJson, bool performFocusDance)
+    private async Task ApplyPreviewSelectionToEditor(string messageJson, bool performFocusDance)
     {
-        var textStartMarker = "\"text\":\"";
-        var textStart = messageJson.IndexOf(textStartMarker);
-        if (textStart < 0) return;
-
-        textStart += textStartMarker.Length;
-        var textEnd = messageJson.LastIndexOf('"');
-        if (textEnd <= textStart) return;
-
-        var selectedText = messageJson[textStart..textEnd]
-            .Replace("\\n", "\n")
-            .Replace("\\r", "\r")
-            .Replace("\\t", "\t")
-            .Replace("\\\"", "\"")
-            .Replace("\\/", "/")
-            .Replace("\\\\", "\\");
+        string selectedText;
+        try
+        {
+            using var doc = JsonDocument.Parse(messageJson);
+            if (!doc.RootElement.TryGetProperty("text", out var textProp)) return;
+            selectedText = textProp.GetString() ?? string.Empty;
+        }
+        catch
+        {
+            return;
+        }
 
         if (string.IsNullOrEmpty(selectedText)) return;
 
-        var index = EditorTextBox.Text.IndexOf(selectedText, StringComparison.Ordinal);
+        // Find the plain-text selection from the preview inside the editor's raw markdown.
+        // sel.toString() uses a single '\n' at block boundaries (paragraph, heading, list item),
+        // but the editor markdown uses '\n\n' between block-level elements.
+        // Try progressively normalised variants so single-word, single-line and multi-block
+        // selections all resolve correctly.
+        var editorText = EditorTextBox.Text;
+        var (index, matchedLength) = MarkdownFormatter.FindPreviewTextInEditor(editorText, selectedText);
         if (index < 0) return;
 
-        // Expand the selection to include surrounding Markdown syntax markers
-        // (e.g. "bold" → "**bold**") so the editor highlights the full formatted
-        // token, not just the visible plain text.
+        // Expand to include surrounding inline Markdown markers (e.g. "bold" → "**bold**").
+        // Use matchedLength (the span in editorText after newline normalisation) rather than
+        // selectedText.Length, which may differ for multi-block selections.
         var (expandedStart, expandedLength) =
-            MarkdownFormatter.ExpandToMarkdownBounds(EditorTextBox.Text, index, selectedText.Length);
+            MarkdownFormatter.ExpandToMarkdownBounds(editorText, index, matchedLength);
 
         _syncingSelectionFromPreview = true;
-        EditorTextBox.SelectionStart = expandedStart;
-        EditorTextBox.SelectionLength = expandedLength;
+        EditorTextBox.Focus(FocusState.Programmatic);
+        EditorTextBox.Select(expandedStart, expandedLength);
         _syncingSelectionFromPreview = false;
+        RefreshAutomationState();
 
         if (performFocusDance)
         {
+            // Suppress outgoing selection messages in the WebView BEFORE changing focus.
+            // The await ensures suppressSelectionMessages() has already run in the renderer
+            // before EditorTextBox.Focus / PreviewWebView.Focus trigger selectionchange
+            // events — breaking the focus-dance → selectionChanged → focus-dance loop.
+            // Messages are re-enabled the next time the user physically interacts with
+            // the preview pane (pointerdown / keydown inside the WebView document).
+            if (PreviewWebView.CoreWebView2 != null)
+                await PreviewWebView.CoreWebView2.ExecuteScriptAsync(
+                    "if(typeof suppressSelectionMessages==='function') suppressSelectionMessages();");
+
             // Briefly focus the editor so WinUI3 transitions through its
             // Focused→Unfocused visual states and correctly renders
             // SelectionHighlightColorWhenNotFocused. Return focus to the preview
@@ -321,6 +340,7 @@ public sealed partial class MainWindow : Window
             PreviewWebView.Focus(FocusState.Programmatic);
         }
     }
+
 
     private void UpdateTitle()
     {
@@ -397,6 +417,11 @@ public sealed partial class MainWindow : Window
     private void PreviewTimer_Tick(object? sender, object e)
     {
         _previewTimer.Stop();
+        // Don't push editor content into the preview while the user is actively editing
+        // it — the preview→editor flow runs via the contentChanged WebMessage instead.
+        // Overwriting the preview while it has focus would discard in-progress edits and
+        // reset the contentEditable cursor position.
+        if (_lastFocusedPanel == FocusedPanel.Preview) return;
         UpdatePreview();
     }
 
@@ -489,6 +514,10 @@ public sealed partial class MainWindow : Window
                 var bodyHtml = MarkdownParser.ToHtmlFragment(_document.Content);
                 var escapedHtml = JsonSerializer.Serialize(bodyHtml);
                 await PreviewWebView.CoreWebView2.ExecuteScriptAsync($"updateContent({escapedHtml});");
+                // updateContent() replaces body.innerHTML, which destroys the DOM nodes
+                // held by any active CSS Custom Highlight range.  Re-apply the current
+                // editor selection so both panes keep their highlight in sync.
+                SyncEditorSelectionToPreview();
             }
         }
         catch
@@ -543,6 +572,8 @@ public sealed partial class MainWindow : Window
         AutomationPreviewHtml.Text = TrimAutomationText(MarkdownParser.ToHtmlFragment(_document.Content));
         AutomationFocusedPanel.Text = _lastFocusedPanel.ToString();
         AutomationViewMode.Text = _viewMode.ToString();
+        AutomationEditorSelectionStart.Text = EditorTextBox.SelectionStart.ToString();
+        AutomationEditorSelectionLength.Text = EditorTextBox.SelectionLength.ToString();
     }
 
     private void SetAutomationSyncSource(string source)
@@ -1048,11 +1079,14 @@ public sealed partial class MainWindow : Window
             var selectedText = JsonSerializer.Deserialize<string>(result);
             if (string.IsNullOrEmpty(selectedText)) return;
 
-            var index = EditorTextBox.Text.IndexOf(selectedText, StringComparison.Ordinal);
+            var editorText = EditorTextBox.Text;
+            var (index, matchedLength) = MarkdownFormatter.FindPreviewTextInEditor(editorText, selectedText);
             if (index < 0) return;
 
-            EditorTextBox.SelectionStart = index;
-            EditorTextBox.SelectionLength = selectedText.Length;
+            var (expandedStart, expandedLength) =
+                MarkdownFormatter.ExpandToMarkdownBounds(editorText, index, matchedLength);
+            EditorTextBox.SelectionStart = expandedStart;
+            EditorTextBox.SelectionLength = expandedLength;
         }
         catch
         {
@@ -1324,6 +1358,12 @@ public sealed partial class MainWindow : Window
         RefreshAutomationState();
     }
 
+    private async void AutomationPreviewSelectBridgeButton_Click(object sender, RoutedEventArgs e)
+        => await ApplyPreviewSelectionToEditor("""{"type":"selectionChanged","text":"bridge"}""", performFocusDance: false);
+
+    private async void AutomationPreviewSelectBoldTextButton_Click(object sender, RoutedEventArgs e)
+        => await ApplyPreviewSelectionToEditor("""{"type":"selectionChanged","text":"preview bold text"}""", performFocusDance: false);
+
     /// <summary>
     /// Sets the editor text to the value of <see cref="AutomationEditorInput"/> and updates all
     /// derived state synchronously.  Called by UI tests via
@@ -1345,7 +1385,6 @@ public sealed partial class MainWindow : Window
         // Suppress TextChanged so we control exactly when _document is updated.
         _suppressTextChanged = true;
         EditorTextBox.Text = rawText;
-        EditorTextBox.SelectionStart = EditorTextBox.Text.Length;
         _suppressTextChanged = false;
 
         _document.Content = EditorTextBox.Text;
