@@ -312,11 +312,60 @@ public static class MarkdownFormatter
         return (s, e - s);
     }
 
+    /// Locates <paramref name="previewText"/> (the plain text from <c>sel.toString()</c>)
+    /// inside the raw markdown <paramref name="editorText"/>.
+    /// <para>
+    /// <c>sel.toString()</c> emits a single <c>\n</c> at each block boundary (paragraph,
+    /// heading, list item), while the editor markdown uses <c>\n\n</c> between blocks.
+    /// This method tries several normalised forms so both single-word and multi-block
+    /// selections resolve correctly.
+    /// </para>
+    /// </summary>
+    /// <returns>
+    /// A tuple of <c>(index, matchedLength)</c> where <c>index</c> is the start position
+    /// of the match in <paramref name="editorText"/> and <c>matchedLength</c> is the
+    /// length of the matched substring (which may differ from <paramref name="previewText"/>.Length
+    /// when newline normalisation was applied). Returns <c>(-1, 0)</c> when not found.
+    /// </returns>
+    public static (int index, int matchedLength) FindPreviewTextInEditor(string editorText, string previewText)
+    {
+        // 1. Exact match — works for plain single-word / single-line selections.
+        var idx = editorText.IndexOf(previewText, StringComparison.Ordinal);
+        if (idx >= 0) return (idx, previewText.Length);
+
+        // 2. Expand single '\n' to '\n\n': sel.toString() uses '\n' at block
+        //    boundaries; the markdown source uses '\n\n' between paragraphs.
+        var normPreview = previewText.Replace("\r\n", "\n");
+        var expanded = normPreview.Replace("\n", "\n\n");
+        if (expanded != previewText)
+        {
+            idx = editorText.IndexOf(expanded, StringComparison.Ordinal);
+            if (idx >= 0) return (idx, expanded.Length);
+        }
+
+        // 3. Normalise both sides to single '\n' — handles '\r\n' in the editor.
+        var normEditor = editorText.Replace("\r\n", "\n");
+        idx = normEditor.IndexOf(normPreview, StringComparison.Ordinal);
+        if (idx >= 0) return (idx, normPreview.Length);
+
+        // 4. Expanded preview vs normalised editor.
+        var expandedNorm = normPreview.Replace("\n", "\n\n");
+        if (expandedNorm != normPreview)
+        {
+            idx = normEditor.IndexOf(expandedNorm, StringComparison.Ordinal);
+            if (idx >= 0) return (idx, expandedNorm.Length);
+        }
+
+        return (-1, 0);
+    }
+
     /// <summary>
     /// Strips common inline Markdown syntax characters from <paramref name="text"/> and
-    /// returns the plain visible string that the preview would render.  Used to locate the
-    /// equivalent highlighted region inside the WebView2 content when mirroring selections
-    /// from the editor to the preview.
+    /// returns the plain visible string that the preview would render.
+    /// The result mirrors what <c>sel.toString()</c> produces in the preview DOM:
+    /// block boundaries (paragraphs, headings) are represented as a single <c>\n</c>.
+    /// Used by <c>SyncEditorSelectionToPreview</c> to pass the correct search text
+    /// to <c>highlightText()</c> in the WebView.
     /// </summary>
     public static string StripInlineMarkdown(string text)
     {
@@ -331,7 +380,11 @@ public static class MarkdownFormatter
         text = text.Replace("`", string.Empty);
         // Remove heading prefix: # at line start
         text = Regex.Replace(text, @"^#{1,6}\s", string.Empty, RegexOptions.Multiline);
-        // Collapse any leftover whitespace runs introduced by removing syntax
+        // Normalise \r\n and double-newlines to a single \n so the result matches
+        // what sel.toString() produces at block boundaries in the preview DOM.
+        text = text.Replace("\r\n", "\n");
+        text = Regex.Replace(text, @"\n{2,}", "\n");
+        // Strip leading/trailing whitespace introduced by removing syntax markers.
         text = text.Trim();
         return text;
     }
