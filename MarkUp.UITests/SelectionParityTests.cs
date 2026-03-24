@@ -25,16 +25,26 @@ public sealed class SelectionParityTests : AppSession
     private static AppiumElement? _editor;
     private static AppiumElement? _selectionStart;
     private static AppiumElement? _selectionLength;
+    private static AppiumElement? _previewSelectionStart;
+    private static AppiumElement? _previewSelectionLength;
     private static AppiumElement? _lastSyncSource;
     private static AppiumElement? _selectBridgeButton;
     private static AppiumElement? _selectBoldTextButton;
+    private static AppiumElement? _selectBoldPartialButton;
+    private static AppiumElement? _selectEditorBoldFullButton;
+    private static AppiumElement? _selectEditorBoldPartialButton;
 
-    private static AppiumElement Editor               => GetCachedElement(ref _editor, "EditorTextBox");
-    private static AppiumElement SelectionStart       => GetCachedElementWithin(ref _selectionStart, ref _bridge, "AutomationBridgePanel", "AutomationEditorSelectionStart");
-    private static AppiumElement SelectionLength      => GetCachedElementWithin(ref _selectionLength, ref _bridge, "AutomationBridgePanel", "AutomationEditorSelectionLength");
-    private static AppiumElement LastSyncSource       => GetCachedElementWithin(ref _lastSyncSource, ref _bridge, "AutomationBridgePanel", "AutomationLastSyncSource");
-    private static AppiumElement SelectBridgeButton   => GetCachedElementWithin(ref _selectBridgeButton, ref _bridge, "AutomationBridgePanel", "AutomationPreviewSelectBridgeButton");
-    private static AppiumElement SelectBoldTextButton => GetCachedElementWithin(ref _selectBoldTextButton, ref _bridge, "AutomationBridgePanel", "AutomationPreviewSelectBoldTextButton");
+    private static AppiumElement Editor                  => GetCachedElement(ref _editor, "EditorTextBox");
+    private static AppiumElement SelectionStart          => GetCachedElementWithin(ref _selectionStart, ref _bridge, "AutomationBridgePanel", "AutomationEditorSelectionStart");
+    private static AppiumElement SelectionLength         => GetCachedElementWithin(ref _selectionLength, ref _bridge, "AutomationBridgePanel", "AutomationEditorSelectionLength");
+    private static AppiumElement PreviewSelectionStart   => GetCachedElementWithin(ref _previewSelectionStart, ref _bridge, "AutomationBridgePanel", "AutomationPreviewSelectionStart");
+    private static AppiumElement PreviewSelectionLength  => GetCachedElementWithin(ref _previewSelectionLength, ref _bridge, "AutomationBridgePanel", "AutomationPreviewSelectionLength");
+    private static AppiumElement LastSyncSource          => GetCachedElementWithin(ref _lastSyncSource, ref _bridge, "AutomationBridgePanel", "AutomationLastSyncSource");
+    private static AppiumElement SelectBridgeButton      => GetCachedElementWithin(ref _selectBridgeButton, ref _bridge, "AutomationBridgePanel", "AutomationPreviewSelectBridgeButton");
+    private static AppiumElement SelectBoldTextButton    => GetCachedElementWithin(ref _selectBoldTextButton, ref _bridge, "AutomationBridgePanel", "AutomationPreviewSelectBoldTextButton");
+    private static AppiumElement SelectBoldPartialButton => GetCachedElementWithin(ref _selectBoldPartialButton, ref _bridge, "AutomationBridgePanel", "AutomationPreviewSelectBoldPartialButton");
+    private static AppiumElement SelectEditorBoldFullButton => GetCachedElementWithin(ref _selectEditorBoldFullButton, ref _bridge, "AutomationBridgePanel", "AutomationEditorSelectBoldFullButton");
+    private static AppiumElement SelectEditorBoldPartialButton => GetCachedElementWithin(ref _selectEditorBoldPartialButton, ref _bridge, "AutomationBridgePanel", "AutomationEditorSelectBoldPartialButton");
 
     [ClassInitialize]
     public static void ClassInit(TestContext _)
@@ -45,14 +55,32 @@ public sealed class SelectionParityTests : AppSession
         if (_bridge is null) return;
         _selectionStart       = TryFindByIdWithin(_bridge, "AutomationEditorSelectionStart");
         _selectionLength      = TryFindByIdWithin(_bridge, "AutomationEditorSelectionLength");
+        _previewSelectionStart = TryFindByIdWithin(_bridge, "AutomationPreviewSelectionStart");
+        _previewSelectionLength = TryFindByIdWithin(_bridge, "AutomationPreviewSelectionLength");
         _lastSyncSource       = TryFindByIdWithin(_bridge, "AutomationLastSyncSource");
         _selectBridgeButton   = TryFindByIdWithin(_bridge, "AutomationPreviewSelectBridgeButton");
         _selectBoldTextButton = TryFindByIdWithin(_bridge, "AutomationPreviewSelectBoldTextButton");
+        _selectBoldPartialButton = TryFindByIdWithin(_bridge, "AutomationPreviewSelectBoldPartialButton");
+        _selectEditorBoldFullButton = TryFindByIdWithin(_bridge, "AutomationEditorSelectBoldFullButton");
+        _selectEditorBoldPartialButton = TryFindByIdWithin(_bridge, "AutomationEditorSelectBoldPartialButton");
     }
 
     [TestInitialize]
     public void Init()
     {
+        ReinitializeSession();
+        _bridge = null;
+        _editor = null;
+        _selectionStart = null;
+        _selectionLength = null;
+        _previewSelectionStart = null;
+        _previewSelectionLength = null;
+        _lastSyncSource = null;
+        _selectBridgeButton = null;
+        _selectBoldTextButton = null;
+        _selectBoldPartialButton = null;
+        _selectEditorBoldFullButton = null;
+        _selectEditorBoldPartialButton = null;
         SkipIfNoSession();
         BringToFront();
         try { SendEscapeKey(); } catch { }
@@ -137,12 +165,39 @@ public sealed class SelectionParityTests : AppSession
             "SelectionLength must be 0 after clicking to deselect.");
     }
 
+    [TestMethod]
+    public void EditorToPreview_FullBoldToken_MapsToVisibleTextRange()
+    {
+        PasteText("**bold**");
+
+        SelectEditorBoldFullButton.Click();
+        Thread.Sleep(300);
+
+        Assert.AreEqual("0", PreviewSelectionStart.Text,
+            "The full bold token should mirror to the start of the rendered text.");
+        Assert.AreEqual("4", PreviewSelectionLength.Text,
+            "The full bold token should mirror only the visible characters, not the markdown delimiters.");
+    }
+
+    [TestMethod]
+    public void EditorToPreview_PartialBoldToken_MapsToSubInlineVisibleRange()
+    {
+        PasteText("**bold**");
+
+        SelectEditorBoldPartialButton.Click();
+        Thread.Sleep(300);
+
+        Assert.AreEqual("0", PreviewSelectionStart.Text,
+            "Selecting 'bo' in markdown should map to the first two rendered characters.");
+        Assert.AreEqual("2", PreviewSelectionLength.Text,
+            "Partial bold selection should mirror only the selected visible substring.");
+    }
+
     // ── Preview→Editor direction ──────────────────────────────────────────────
 
     /// <summary>
-    /// AutomationPreviewSelectBridgeButton calls ApplyPreviewSelectionToEditor with text="bridge".
-    /// Content is "preview bridge text" so FindPreviewTextInEditor must locate "bridge" at index 8
-    /// and ExpandToMarkdownBounds must leave it unchanged (no markdown markers around a plain word).
+    /// AutomationPreviewSelectBridgeButton sends the committed visible offsets for "bridge".
+    /// Content is "preview bridge text" so the editor selection should land on the same source word.
     /// </summary>
     [TestMethod]
     public void PreviewToEditor_PlainWordSelection_SetsCorrectSelectionIndices()
@@ -153,7 +208,7 @@ public sealed class SelectionParityTests : AppSession
         Assert.AreEqual("preview bridge text", Editor.Text,
             "Precondition: editor must contain 'preview bridge text'.");
 
-        // Simulate the preview sending selectionChanged with text="bridge".
+        // Simulate the preview sending the committed visible range for "bridge".
         SelectBridgeButton.Click();
         Thread.Sleep(500);
 
@@ -164,9 +219,8 @@ public sealed class SelectionParityTests : AppSession
     }
 
     /// <summary>
-    /// AutomationPreviewSelectBoldTextButton calls ApplyPreviewSelectionToEditor with text="preview bold text".
-    /// Content is "**preview bold text**" so ExpandToMarkdownBounds must widen [2,17] to [0,21],
-    /// covering the surrounding ** markers. This is the key regression test for the IndexOf fix.
+    /// AutomationPreviewSelectBoldTextButton sends the full visible span of a bold token.
+    /// Content is "**preview bold text**" so the editor selection must widen to the full markdown token.
     /// </summary>
     [TestMethod]
     public void PreviewToEditor_BoldWordSelection_ExpandsToIncludeMarkdownMarkers()
@@ -178,8 +232,7 @@ public sealed class SelectionParityTests : AppSession
         Assert.IsTrue(editorText.Contains("preview bold text"),
             $"Precondition: editor must contain bold text, got: '{editorText}'.");
 
-        // Simulate the preview sending selectionChanged with text="preview bold text"
-        // (exactly what sel.toString() returns — no ** markers).
+        // Simulate the preview sending the full visible selection for the bold content.
         SelectBoldTextButton.Click();
         Thread.Sleep(500);
 
@@ -190,21 +243,30 @@ public sealed class SelectionParityTests : AppSession
 
         var selectedSpan = editorText.Substring(start, length);
 
-        if (editorText.Contains("**preview bold text**"))
-        {
-            Assert.AreEqual("**preview bold text**", selectedSpan,
-                "ExpandToMarkdownBounds must widen selection to include the surrounding ** markers.");
-            Assert.AreEqual(0, start,
-                "SelectionStart must be 0 when the bold span begins the document.");
-            Assert.AreEqual(21, length,
-                "SelectionLength must be 21 for '**preview bold text**'.");
-        }
-        else
-        {
-            // Markdown was stripped on the way in — selection must still cover the plain words.
-            Assert.IsTrue(selectedSpan.Contains("preview bold text"),
-                $"Selected span must contain 'preview bold text', got '{selectedSpan}'.");
-        }
+        Assert.AreEqual("**preview bold text**", selectedSpan,
+            "Full visible bold selection must widen to include the surrounding ** markers.");
+        Assert.AreEqual(0, start,
+            "SelectionStart must be 0 when the bold span begins the document.");
+        Assert.AreEqual(21, length,
+            "SelectionLength must be 21 for '**preview bold text**'.");
+    }
+
+    /// <summary>
+    /// AutomationPreviewSelectBoldPartialButton sends a committed visible sub-range inside bold text.
+    /// The editor must select only the corresponding source characters, not the surrounding ** markers.
+    /// </summary>
+    [TestMethod]
+    public void PreviewToEditor_PartialBoldSelection_PreservesSubInlinePrecision()
+    {
+        PasteText("**bold**");
+
+        SelectBoldPartialButton.Click();
+        Thread.Sleep(500);
+
+        Assert.AreEqual("2", SelectionStart.Text,
+            "Preview sub-inline selection should map to the visible source characters inside the token.");
+        Assert.AreEqual("2", SelectionLength.Text,
+            "Preview sub-inline selection should not expand to the full markdown token.");
     }
 
     /// <summary>
