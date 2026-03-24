@@ -197,6 +197,16 @@ public static class MarkdownFormatter
 
         var selected = fullText.Substring(selectionStart, selectionLength);
 
+        if (TryRemoveTripleAsteriskCombination(fullText, selectionStart, selectionLength, marker, out var tripleResult))
+        {
+            return tripleResult;
+        }
+
+        if (TryRemoveNestedMarker(fullText, selectionStart, selectionLength, marker, out var nestedResult))
+        {
+            return nestedResult;
+        }
+
         // Check if the selection itself is already wrapped with exactly this marker.
         // IsExactMarkerAt guards against e.g. "*" matching inside "**", which would
         // otherwise cause italic-toggle to strip one "*" each side of bold text.
@@ -228,6 +238,66 @@ public static class MarkdownFormatter
         }
     }
 
+    /// <summary>
+    /// Handles the case where the selected span itself starts and ends with <paramref name="marker"/>
+    /// and is enclosed by the same marker in the surrounding text — i.e. the selected text is the
+    /// inner marker pair of a nested run such as <c>*<em>*text*</em>*</c>.
+    /// Removes both the inner and outer marker pair, returning the unwrapped inner text.
+    /// </summary>
+    private static bool TryRemoveNestedMarker(string fullText, int selectionStart, int selectionLength, string marker, out FormattingResult result)
+    {
+        result = default;
+
+        if (marker.Length != 1 || selectionLength < 2)
+            return false;
+
+        if (!IsMarkerAt(fullText, selectionStart, marker)
+            || !IsMarkerAt(fullText, selectionStart + selectionLength - marker.Length, marker))
+            return false;
+
+        var precedingMarkerIndex = selectionStart - marker.Length;
+        var trailingMarkerIndex = selectionStart + selectionLength;
+        if (!IsMarkerAt(fullText, precedingMarkerIndex, marker) || !IsMarkerAt(fullText, trailingMarkerIndex, marker))
+            return false;
+
+        var innerSelectionStart = selectionStart + marker.Length;
+        var innerSelectionLength = selectionLength - marker.Length * 2;
+        if (innerSelectionLength <= 0)
+            return false;
+
+        var newText = fullText[..precedingMarkerIndex]
+            + fullText[innerSelectionStart..(innerSelectionStart + innerSelectionLength)]
+            + fullText[(trailingMarkerIndex + marker.Length)..];
+
+        result = new FormattingResult(newText, precedingMarkerIndex, innerSelectionLength);
+        return true;
+    }
+
+    /// <summary>
+    /// Handles the special case where the entire document is a bold-italic run such as
+    /// <c>***text***</c> and the italic marker (<c>*</c>) is being toggled off.
+    /// Produces <c>**text**</c> by stripping one asterisk from each side.
+    /// Only applies when <paramref name="marker"/> is <c>"*"</c> and the selection covers
+    /// the full triple-asterisk span at position 0.
+    /// </summary>
+    private static bool TryRemoveTripleAsteriskCombination(string fullText, int selectionStart, int selectionLength, string marker, out FormattingResult result)
+    {
+        result = default;
+
+        if (marker != "*" || selectionStart != 0 || selectionLength < 6 || selectionLength > fullText.Length)
+            return false;
+
+        var selected = fullText.Substring(selectionStart, selectionLength);
+        if (!selected.StartsWith("***", StringComparison.Ordinal) || !selected.EndsWith("***", StringComparison.Ordinal))
+            return false;
+
+        var inner = selected[3..^3];
+        var replacement = $"**{inner}**";
+        var newText = replacement + fullText[(selectionStart + selectionLength)..];
+        result = new FormattingResult(newText, selectionStart, replacement.Length);
+        return true;
+    }
+
     // Returns true only when text[pos..pos+marker.Length] exactly equals marker and
     // is not part of a longer run of the same marker on either side.
     // The guards check for a full duplicate of the marker adjacent to the match, so
@@ -243,6 +313,20 @@ public static class MarkdownFormatter
         // Guard: a full copy of the marker immediately after has the same meaning.
         if (pos + marker.Length * 2 <= text.Length && text.Substring(pos + marker.Length, marker.Length) == marker) return false;
         return true;
+    }
+
+    /// <summary>
+    /// Returns <see langword="true"/> when <paramref name="text"/> contains
+    /// <paramref name="marker"/> starting at <paramref name="pos"/>.
+    /// Unlike <see cref="IsExactMarkerAt"/>, this does not check for adjacent duplicates,
+    /// so <c>"*"</c> will match inside <c>"**"</c>. Use only for nested-removal checks
+    /// where the broader context has already been validated.
+    /// </summary>
+    private static bool IsMarkerAt(string text, int pos, string marker)
+    {
+        return pos >= 0
+               && pos + marker.Length <= text.Length
+               && string.CompareOrdinal(text, pos, marker, 0, marker.Length) == 0;
     }
 
     private static FormattingResult InsertLinePrefix(string fullText, int selectionStart, string prefix)
@@ -312,8 +396,40 @@ public static class MarkdownFormatter
         return (s, e - s);
     }
 
+    private static (int index, int length) MapMatch(string original, int normStart, int normLength)
+    {
+        if (normStart < 0) return (-1, 0);
+        int start = -1;
+        int end = -1;
+        int normIdx = 0;
+        for (int i = 0; i < original.Length; i++)
+        {
+            if (normIdx == normStart && start == -1) start = i;
+            if (normIdx == normStart + normLength && end == -1) end = i;
+
+            if (original[i] == '\r' && i + 1 < original.Length && original[i + 1] == '\n')
+                continue; // don't increment normIdx for \r, so \r\n maps to a single \n in normalized text
+            normIdx++;
+        }
+        if (start == -1) start = original.Length;
+        if (end == -1) end = original.Length;
+        return (start, end - start);
+    }
+
+    private static int IndexOfNth(string source, string value, int occurrenceIndex)
+    {
+        int idx = -1;
+        for (int i = 0; i <= occurrenceIndex; i++)
+        {
+            idx = source.IndexOf(value, idx + 1, StringComparison.Ordinal);
+            if (idx == -1) break;
+        }
+        return idx;
+    }
+
+    /// <summary>
     /// Locates <paramref name="previewText"/> (the plain text from <c>sel.toString()</c>)
-    /// inside the raw markdown <paramref name="editorText"/>.
+    /// inside the raw markdown <paramref name="editorText"/> using <paramref name="occurrenceIndex"/>.
     /// <para>
     /// <c>sel.toString()</c> emits a single <c>\n</c> at each block boundary (paragraph,
     /// heading, list item), while the editor markdown uses <c>\n\n</c> between blocks.
@@ -327,10 +443,10 @@ public static class MarkdownFormatter
     /// length of the matched substring (which may differ from <paramref name="previewText"/>.Length
     /// when newline normalisation was applied). Returns <c>(-1, 0)</c> when not found.
     /// </returns>
-    public static (int index, int matchedLength) FindPreviewTextInEditor(string editorText, string previewText)
+    public static (int index, int matchedLength) FindPreviewTextInEditor(string editorText, string previewText, int occurrenceIndex = 0)
     {
         // 1. Exact match — works for plain single-word / single-line selections.
-        var idx = editorText.IndexOf(previewText, StringComparison.Ordinal);
+        var idx = IndexOfNth(editorText, previewText, occurrenceIndex);
         if (idx >= 0) return (idx, previewText.Length);
 
         // 2. Expand single '\n' to '\n\n': sel.toString() uses '\n' at block
@@ -339,24 +455,44 @@ public static class MarkdownFormatter
         var expanded = normPreview.Replace("\n", "\n\n");
         if (expanded != previewText)
         {
-            idx = editorText.IndexOf(expanded, StringComparison.Ordinal);
+            idx = IndexOfNth(editorText, expanded, occurrenceIndex);
             if (idx >= 0) return (idx, expanded.Length);
         }
 
         // 3. Normalise both sides to single '\n' — handles '\r\n' in the editor.
         var normEditor = editorText.Replace("\r\n", "\n");
-        idx = normEditor.IndexOf(normPreview, StringComparison.Ordinal);
-        if (idx >= 0) return (idx, normPreview.Length);
+        idx = IndexOfNth(normEditor, normPreview, occurrenceIndex);
+        if (idx >= 0) return MapMatch(editorText, idx, normPreview.Length);
 
         // 4. Expanded preview vs normalised editor.
         var expandedNorm = normPreview.Replace("\n", "\n\n");
         if (expandedNorm != normPreview)
         {
-            idx = normEditor.IndexOf(expandedNorm, StringComparison.Ordinal);
-            if (idx >= 0) return (idx, expandedNorm.Length);
+            idx = IndexOfNth(normEditor, expandedNorm, occurrenceIndex);
+            if (idx >= 0) return MapMatch(editorText, idx, expandedNorm.Length);
         }
 
         return (-1, 0);
+    }
+
+    /// <summary>
+    /// Computes the occurrence index of <paramref name="plainText"/> in the plain text representation
+    /// of the markdown up to <paramref name="selectionStart"/>.
+    /// </summary>
+    public static int GetOccurrenceIndex(string fullText, int selectionStart, string plainText)
+    {
+        if (selectionStart <= 0 || string.IsNullOrEmpty(plainText)) return 0;
+        var textBefore = fullText.Substring(0, Math.Min(selectionStart, fullText.Length));
+        var plainBefore = StripInlineMarkdown(textBefore);
+
+        int count = 0;
+        int tmpIdx = plainBefore.IndexOf(plainText, StringComparison.Ordinal);
+        while (tmpIdx >= 0)
+        {
+            count++;
+            tmpIdx = plainBefore.IndexOf(plainText, tmpIdx + 1, StringComparison.Ordinal);
+        }
+        return count;
     }
 
     /// <summary>
@@ -376,7 +512,7 @@ public static class MarkdownFormatter
         text = Regex.Replace(text, @"\*{1,3}|_{1,3}", string.Empty);
         // Remove strikethrough: ~~
         text = Regex.Replace(text, @"~~", string.Empty);
-        // Remove inline code backticks: `
+        // Remove inline code backticks: ``
         text = text.Replace("`", string.Empty);
         // Remove heading prefix: # at line start
         text = Regex.Replace(text, @"^#{1,6}\s", string.Empty, RegexOptions.Multiline);
