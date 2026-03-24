@@ -39,6 +39,13 @@ public sealed partial class MainWindow : Window
     private string _currentPrintHtml = string.Empty;
     private bool _previewInitialized;
     private bool _isUpdatingPreview;
+    private MarkdownSelectionProjection? _selectionProjection;
+    private string _selectionProjectionText = string.Empty;
+    private int _lastMirroredPreviewSelectionStart;
+    private int _lastMirroredPreviewSelectionLength;
+    private PreviewSelectionPayload? _lastCommittedPreviewSelection;
+    private int _lastMirroredPreviewSelectionStartInEditor;
+    private int _lastMirroredPreviewSelectionLengthInEditor;
 
     // Debounce state for AutomationEditorInput — only process once content is stable for ≥2 ticks (≥300 ms)
     private string _pendingAutomationInput = string.Empty;
@@ -47,6 +54,12 @@ public sealed partial class MainWindow : Window
     // View modes
     private enum ViewMode { Split, EditorOnly, PreviewOnly }
     private ViewMode _viewMode = ViewMode.Split;
+
+    private sealed class PreviewSelectionPayload
+    {
+        public int Start { get; set; }
+        public int Length { get; set; }
+    }
 
     // Tracks which editing panel last held keyboard focus for routing edit/format commands.
     // Unlike a "current focus" field, this is intentionally NOT reset when focus moves to a
@@ -185,91 +198,71 @@ public sealed partial class MainWindow : Window
     {
         try
         {
-            var messageJson = args.WebMessageAsJson;
+            var messageJson = NormalizeWebMessagePayload(args.WebMessageAsJson);
             if (string.IsNullOrEmpty(messageJson)) return;
 
+            using var doc = JsonDocument.Parse(messageJson);
+            if (!doc.RootElement.TryGetProperty("type", out var typeProp)) return;
+            var messageType = typeProp.GetString();
+            if (string.IsNullOrEmpty(messageType)) return;
+
             // Handle link open request: { "type": "openLink", "url": "..." }
-            if (messageJson.Contains("openLink"))
+            if (string.Equals(messageType, "openLink", StringComparison.Ordinal))
             {
-                var urlStartMarker = "\"url\":\"";
-                var urlStart = messageJson.IndexOf(urlStartMarker);
-                if (urlStart >= 0)
+                if (doc.RootElement.TryGetProperty("url", out var urlProp))
                 {
-                    urlStart += urlStartMarker.Length;
-                    var urlEnd = messageJson.IndexOf('"', urlStart);
-                    if (urlEnd > urlStart)
+                    var url = urlProp.GetString();
+                    if (!string.IsNullOrWhiteSpace(url)
+                        && Uri.TryCreate(url, UriKind.Absolute, out var uri)
+                        && (uri.Scheme == "http" || uri.Scheme == "https"))
                     {
-                        var url = messageJson[urlStart..urlEnd]
-                            .Replace("\\\"", "\"")
-                            .Replace("\\/", "/")
-                            .Replace("\\\\", "\\");
-                        if (Uri.TryCreate(url, UriKind.Absolute, out var uri) &&
-                            (uri.Scheme == "http" || uri.Scheme == "https"))
-                        {
-                            _ = Windows.System.Launcher.LaunchUriAsync(uri);
-                        }
+                        _ = Windows.System.Launcher.LaunchUriAsync(uri);
                     }
                 }
                 return;
             }
 
-            // Handle intermediate selection changing (drag in progress):
-            // { "type": "selectionChanging", "text": "..." }
-            // Updates the editor selection on every animation frame without a focus
-            // dance so the highlight tracks character-by-character during drag.
-            if (messageJson.Contains("selectionChanging"))
+            // Handle final preview selection commit: { "type": "selectionChanged", "start": 0, "length": 2 }
+            if (string.Equals(messageType, "selectionChanged", StringComparison.Ordinal))
             {
-                await ApplyPreviewSelectionToEditor(messageJson, performFocusDance: false);
-                return;
-            }
+                var selection = JsonSerializer.Deserialize<PreviewSelectionPayload>(messageJson);
+                if (selection is not null)
+                    SetLastCommittedPreviewSelection(selection);
 
-            // Handle final selection changed (pointer released or selection stabilised):
-            // { "type": "selectionChanged", "text": "..." }
-            // Includes the focus dance so WinUI3 renders
-            // SelectionHighlightColorWhenNotFocused correctly.
-            if (messageJson.Contains("selectionChanged"))
-            {
                 await ApplyPreviewSelectionToEditor(messageJson, performFocusDance: true);
                 return;
             }
 
             // Handle content changed: { "type": "contentChanged", "html": "..." }
-            if (!messageJson.Contains("contentChanged")) return;
+            if (!string.Equals(messageType, "contentChanged", StringComparison.Ordinal)) return;
+            if (!doc.RootElement.TryGetProperty("html", out var htmlProp)) return;
 
-            var htmlStartMarker = "\"html\":\"";
-            var htmlStart = messageJson.IndexOf(htmlStartMarker);
-            if (htmlStart < 0) return;
-
-            htmlStart += htmlStartMarker.Length;
-            var htmlEnd = messageJson.LastIndexOf('"');
-            if (htmlEnd <= htmlStart) return;
-
-            var htmlContent = messageJson[htmlStart..htmlEnd];
-            // Unescape JSON string
-            htmlContent = htmlContent
-                .Replace("\\n", "\n")
-                .Replace("\\r", "\r")
-                .Replace("\\t", "\t")
-                .Replace("\\\"", "\"")
-                .Replace("\\/", "/")
-                .Replace("\\\\", "\\");
+            var htmlContent = htmlProp.GetString() ?? string.Empty;
+            var previewSelection = new PreviewSelectionPayload
+            {
+                Start = doc.RootElement.TryGetProperty("start", out var startProp) ? startProp.GetInt32() : 0,
+                Length = doc.RootElement.TryGetProperty("length", out var lengthProp) ? lengthProp.GetInt32() : 0
+            };
+            SetLastCommittedPreviewSelection(previewSelection);
 
             var markdown = HtmlToMarkdownConverter.Convert(htmlContent);
+            var projection = MarkdownSelectionProjection.Create(markdown);
+            var (selectionStart, selectionLength) = projection.MapVisibleSelectionToSource(
+                previewSelection.Start,
+                previewSelection.Length,
+                includeMarkdownDelimitersWhenFullySelected: true);
 
             // Stop the debounce timer to prevent a feedback loop:
             // preview edit -> markdown update -> timer fires -> UpdatePreview() -> overwrites preview
             _previewTimer.Stop();
 
             _suppressPreviewSync = true;
-            _suppressTextChanged = true;
-            EditorTextBox.Text = markdown;
-            _suppressTextChanged = false;
-            _document.Content = markdown;
+            ApplyEditorDocumentUpdate(markdown, selectionStart, selectionLength, syncSource: "PreviewToEditor");
+            _selectionProjection = projection;
+            _selectionProjectionText = markdown;
+            ApplyEditorSelectionFromPreview(selectionStart, selectionLength);
             // Clear sync suppression synchronously — timer is already stopped so no race condition
             _suppressPreviewSync = false;
-            SetAutomationSyncSource("PreviewToEditor");
-            UpdateTitle();
-            UpdateStatusBar();
         }
         catch
         {
@@ -278,46 +271,81 @@ public sealed partial class MainWindow : Window
     }
 
     /// <summary>
-    /// Parses a preview selection message and mirrors the selection into the editor.
-    /// Shared by both <c>selectionChanging</c> (intermediate, no focus dance) and
-    /// <c>selectionChanged</c> (final, with focus dance) message handlers.
+    /// Unwraps the outer JSON-string layer that WebView2 adds when the renderer calls
+    /// <c>postMessage(JSON.stringify(obj))</c>.
+    /// WebView2 delivers the entire argument as a JSON-encoded string, so the raw
+    /// <c>WebMessageAsJson</c> value is <c>"\"{...}\""</c> rather than <c>"{...}"</c>.
+    /// Returns the inner string when the root element is a JSON string, otherwise
+    /// returns <paramref name="webMessageAsJson"/> unchanged.
+    /// </summary>
+    private static string NormalizeWebMessagePayload(string webMessageAsJson)
+    {
+        if (string.IsNullOrWhiteSpace(webMessageAsJson))
+            return string.Empty;
+
+        try
+        {
+            using var doc = JsonDocument.Parse(webMessageAsJson);
+            return doc.RootElement.ValueKind == JsonValueKind.String
+                ? doc.RootElement.GetString() ?? string.Empty
+                : webMessageAsJson;
+        }
+        catch (JsonException)
+        {
+            return webMessageAsJson;
+        }
+    }
+
+    /// <summary>
+    /// Parses a committed preview selection message and mirrors the selection into the editor.
     /// </summary>
     private async Task ApplyPreviewSelectionToEditor(string messageJson, bool performFocusDance)
     {
-        string selectedText;
+        int selectionStart;
+        int selectionLength;
         try
         {
             using var doc = JsonDocument.Parse(messageJson);
-            if (!doc.RootElement.TryGetProperty("text", out var textProp)) return;
-            selectedText = textProp.GetString() ?? string.Empty;
+            if (doc.RootElement.TryGetProperty("start", out var startProp)
+                && doc.RootElement.TryGetProperty("length", out var lengthProp))
+            {
+                selectionStart = startProp.GetInt32();
+                selectionLength = lengthProp.GetInt32();
+            }
+            else
+            {
+                string selectedText;
+                int occurrenceIndex = 0;
+                if (!doc.RootElement.TryGetProperty("text", out var textProp)) return;
+                selectedText = textProp.GetString() ?? string.Empty;
+                if (string.IsNullOrEmpty(selectedText)) return;
+                if (doc.RootElement.TryGetProperty("occurrenceIndex", out var occProp))
+                {
+                    occurrenceIndex = occProp.GetInt32();
+                }
+
+                var editorText = EditorTextBox.Text;
+                var (index, matchedLength) = MarkdownFormatter.FindPreviewTextInEditor(editorText, selectedText, occurrenceIndex);
+                if (index < 0) return;
+
+                (selectionStart, selectionLength) = MarkdownFormatter.ExpandToMarkdownBounds(editorText, index, matchedLength);
+            }
         }
         catch
         {
             return;
         }
 
-        if (string.IsNullOrEmpty(selectedText)) return;
+        if (!messageJson.Contains("\"text\"", StringComparison.Ordinal))
+        {
+            var projection = GetSelectionProjection();
+            (selectionStart, selectionLength) = projection.MapVisibleSelectionToSource(
+                selectionStart,
+                selectionLength,
+                includeMarkdownDelimitersWhenFullySelected: true);
+        }
 
-        // Find the plain-text selection from the preview inside the editor's raw markdown.
-        // sel.toString() uses a single '\n' at block boundaries (paragraph, heading, list item),
-        // but the editor markdown uses '\n\n' between block-level elements.
-        // Try progressively normalised variants so single-word, single-line and multi-block
-        // selections all resolve correctly.
-        var editorText = EditorTextBox.Text;
-        var (index, matchedLength) = MarkdownFormatter.FindPreviewTextInEditor(editorText, selectedText);
-        if (index < 0) return;
-
-        // Expand to include surrounding inline Markdown markers (e.g. "bold" → "**bold**").
-        // Use matchedLength (the span in editorText after newline normalisation) rather than
-        // selectedText.Length, which may differ for multi-block selections.
-        var (expandedStart, expandedLength) =
-            MarkdownFormatter.ExpandToMarkdownBounds(editorText, index, matchedLength);
-
-        _syncingSelectionFromPreview = true;
-        EditorTextBox.Focus(FocusState.Programmatic);
-        EditorTextBox.Select(expandedStart, expandedLength);
-        _syncingSelectionFromPreview = false;
-        RefreshAutomationState();
+        ApplyEditorSelectionFromPreview(selectionStart, selectionLength);
 
         if (performFocusDance)
         {
@@ -345,6 +373,169 @@ public sealed partial class MainWindow : Window
     private void UpdateTitle()
     {
         Title = _document.GetWindowTitle();
+    }
+
+    private MarkdownSelectionProjection GetSelectionProjection()
+    {
+        var editorText = EditorTextBox.Text;
+        if (_selectionProjection is null || !string.Equals(_selectionProjectionText, editorText, StringComparison.Ordinal))
+        {
+            _selectionProjection = MarkdownSelectionProjection.Create(editorText);
+            _selectionProjectionText = editorText;
+        }
+
+        return _selectionProjection;
+    }
+
+    /// <summary>
+    /// Clears the cached <see cref="MarkdownSelectionProjection"/> so that the next call to
+    /// <see cref="GetSelectionProjection"/> rebuilds it from the current editor text.
+    /// Must be called any time the editor document content changes.
+    /// </summary>
+    private void InvalidateSelectionProjection()
+    {
+        _selectionProjection = null;
+        _selectionProjectionText = string.Empty;
+    }
+
+    /// <summary>
+    /// Converts a source-offset editor selection to the corresponding visible-character
+    /// offsets in the rendered preview by using the current <see cref="MarkdownSelectionProjection"/>.
+    /// The returned <see cref="PreviewSelectionPayload"/> can be passed directly to
+    /// <see cref="RestorePreviewSelectionAsync"/> after a preview re-render.
+    /// </summary>
+    private PreviewSelectionPayload GetVisibleSelectionForEditorRange(int selectionStart, int selectionLength)
+    {
+        var projection = GetSelectionProjection();
+        var (visibleStart, visibleLength) = projection.MapSourceSelectionToVisible(selectionStart, selectionLength);
+        return new PreviewSelectionPayload
+        {
+            Start = visibleStart,
+            Length = visibleLength
+        };
+    }
+
+    /// <summary>
+    /// Returns a shallow copy of <paramref name="selection"/> so that the cached value
+    /// is not aliased with a live reference that could be mutated later.
+    /// </summary>
+    private static PreviewSelectionPayload ClonePreviewSelection(PreviewSelectionPayload selection)
+    {
+        ArgumentNullException.ThrowIfNull(selection);
+
+        return new PreviewSelectionPayload
+        {
+            Start = selection.Start,
+            Length = selection.Length
+        };
+    }
+
+    /// <summary>
+    /// Updates the cached last-committed preview visible-offset selection.
+    /// Stores a defensive copy so callers can safely reuse the original object.
+    /// Pass <see langword="null"/> to clear the cache.
+    /// </summary>
+    private void SetLastCommittedPreviewSelection(PreviewSelectionPayload? selection)
+    {
+        _lastCommittedPreviewSelection = selection is null ? null : ClonePreviewSelection(selection);
+    }
+
+    /// <summary>
+    /// Applies a new document text and selection to the editor in a single, atomic update.
+    /// Sets <c>_suppressTextChanged</c> to prevent re-entrant preview sync, optionally marks
+    /// the selection as preview-originated (<c>_syncingSelectionFromPreview</c>) so that
+    /// the selection-changed handler does not clear the preview selection cache, invalidates
+    /// the projection, and refreshes the title and status bar.
+    /// </summary>
+    private void ApplyEditorDocumentUpdate(string newText, int selectionStart, int selectionLength, string? syncSource = null, bool selectionFromPreview = false)
+    {
+        _suppressTextChanged = true;
+        if (selectionFromPreview)
+            _syncingSelectionFromPreview = true;
+
+        EditorTextBox.Text = newText;
+        EditorTextBox.SelectionStart = Math.Clamp(selectionStart, 0, EditorTextBox.Text.Length);
+        EditorTextBox.SelectionLength = Math.Clamp(selectionLength, 0, EditorTextBox.Text.Length - EditorTextBox.SelectionStart);
+
+        if (selectionFromPreview)
+            _syncingSelectionFromPreview = false;
+
+        _suppressTextChanged = false;
+
+        _document.Content = EditorTextBox.Text;
+        InvalidateSelectionProjection();
+
+        if (!string.IsNullOrEmpty(syncSource))
+            SetAutomationSyncSource(syncSource);
+
+        UpdateTitle();
+        UpdateStatusBar();
+    }
+
+    /// <summary>
+    /// Sets the editor's selection to a range that was derived from a preview selection,
+    /// caching the source-offset coordinates and setting <c>_syncingSelectionFromPreview</c>
+    /// so the selection-changed handler knows not to clear the preview selection cache.
+    /// </summary>
+    private void ApplyEditorSelectionFromPreview(int selectionStart, int selectionLength)
+    {
+        _lastMirroredPreviewSelectionStartInEditor = selectionStart;
+        _lastMirroredPreviewSelectionLengthInEditor = selectionLength;
+        _syncingSelectionFromPreview = true;
+        EditorTextBox.Select(selectionStart, selectionLength);
+        _syncingSelectionFromPreview = false;
+        RefreshAutomationState();
+    }
+
+    /// <summary>
+    /// Updates the source-offset preview selection cache without touching the editor selection.
+    /// Called after a preview-originated formatting command completes so that the next toolbar
+    /// action targets the newly-formatted range rather than the stale pre-format range.
+    /// </summary>
+    private void CachePreviewSelectionInEditor(int selectionStart, int selectionLength)
+    {
+        _lastMirroredPreviewSelectionStartInEditor = selectionStart;
+        _lastMirroredPreviewSelectionLengthInEditor = selectionLength;
+    }
+
+    /// <summary>
+    /// Queries the current DOM selection from the preview WebView by executing
+    /// <c>getSelectionOffsets()</c> in the renderer and deserialising the returned JSON.
+    /// Returns <see langword="null"/> if the WebView is not ready or the script call fails.
+    /// Collapsed carets are returned as a payload with <c>Length = 0</c>.
+    /// </summary>
+    private async Task<PreviewSelectionPayload?> GetPreviewSelectionAsync()
+    {
+        if (!_webViewReady || PreviewWebView.CoreWebView2 == null) return null;
+
+        try
+        {
+            var result = await PreviewWebView.CoreWebView2.ExecuteScriptAsync(
+                "(function(){ if(typeof getSelectionOffsets!=='function'){ return { start: 0, length: 0 }; } var s = window.getSelection(); return getSelectionOffsets(s); })();");
+            if (string.IsNullOrEmpty(result) || result is "null") return null;
+
+            return JsonSerializer.Deserialize<PreviewSelectionPayload>(result);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Restores a previously captured DOM selection in the preview WebView by executing
+    /// <c>setSelectionOffsets(start, length)</c> in the renderer.
+    /// Also updates <see cref="SetLastCommittedPreviewSelection"/> so that subsequent
+    /// toolbar formatting commands have an up-to-date visible-offset cache.
+    /// </summary>
+    private async Task RestorePreviewSelectionAsync(PreviewSelectionPayload selection)
+    {
+        if (!_webViewReady || PreviewWebView.CoreWebView2 == null) return;
+
+        SetLastCommittedPreviewSelection(selection);
+
+        await PreviewWebView.CoreWebView2.ExecuteScriptAsync(
+            $"if(typeof setSelectionOffsets==='function') setSelectionOffsets({selection.Start}, {selection.Length});");
     }
 
     #region Editor Events
@@ -380,6 +571,14 @@ public sealed partial class MainWindow : Window
         if (_suppressTextChanged) return;
 
         _document.Content = EditorTextBox.Text;
+        _selectionProjection = null;
+        _selectionProjectionText = string.Empty;
+        if (_lastFocusedPanel == FocusedPanel.Editor)
+        {
+            SetLastCommittedPreviewSelection(null);
+            _lastMirroredPreviewSelectionStartInEditor = 0;
+            _lastMirroredPreviewSelectionLengthInEditor = 0;
+        }
         SetAutomationSyncSource("EditorToPreview");
         UpdateTitle();
         UpdateStatusBar();
@@ -391,27 +590,45 @@ public sealed partial class MainWindow : Window
 
     private void EditorTextBox_SelectionChanged(object sender, RoutedEventArgs e)
     {
+        if (!_syncingSelectionFromPreview && _lastFocusedPanel == FocusedPanel.Editor)
+        {
+            SetLastCommittedPreviewSelection(null);
+            _lastMirroredPreviewSelectionStartInEditor = 0;
+            _lastMirroredPreviewSelectionLengthInEditor = 0;
+        }
+
         UpdateCursorPosition();
         SyncEditorSelectionToPreview();
     }
 
     private void SyncEditorSelectionToPreview()
     {
-        // Bail out when editor selection is being set programmatically from the preview;
-        // the JS selectionchange listener has already applied the correct CSS highlight.
         if (_syncingSelectionFromPreview) return;
         if (!_webViewReady || PreviewWebView.CoreWebView2 == null) return;
         if (EditorTextBox.SelectionLength == 0)
         {
-            _ = PreviewWebView.CoreWebView2.ExecuteScriptAsync("if(typeof highlightText==='function') highlightText('');");
+            _lastMirroredPreviewSelectionStart = 0;
+            _lastMirroredPreviewSelectionLength = 0;
+            RefreshAutomationState();
+            _ = PreviewWebView.CoreWebView2.ExecuteScriptAsync("if(typeof clearMirroredSelection==='function') clearMirroredSelection();");
             return;
         }
 
-        var plainText = MarkdownFormatter.StripInlineMarkdown(EditorTextBox.SelectedText);
-        if (string.IsNullOrEmpty(plainText)) return;
+        var projection = GetSelectionProjection();
+        var (visibleStart, visibleLength) = projection.MapSourceSelectionToVisible(EditorTextBox.SelectionStart, EditorTextBox.SelectionLength);
+        if (visibleLength <= 0)
+        {
+            _lastMirroredPreviewSelectionStart = 0;
+            _lastMirroredPreviewSelectionLength = 0;
+            RefreshAutomationState();
+            _ = PreviewWebView.CoreWebView2.ExecuteScriptAsync("if(typeof clearMirroredSelection==='function') clearMirroredSelection();");
+            return;
+        }
 
-        var escaped = JsonSerializer.Serialize(plainText);
-        _ = PreviewWebView.CoreWebView2.ExecuteScriptAsync($"if(typeof highlightText==='function') highlightText({escaped});");
+        _lastMirroredPreviewSelectionStart = visibleStart;
+        _lastMirroredPreviewSelectionLength = visibleLength;
+        RefreshAutomationState();
+        _ = PreviewWebView.CoreWebView2.ExecuteScriptAsync($"if(typeof setMirroredSelection==='function') setMirroredSelection({visibleStart}, {visibleLength});");
     }
 
     private void PreviewTimer_Tick(object? sender, object e)
@@ -422,7 +639,7 @@ public sealed partial class MainWindow : Window
         // Overwriting the preview while it has focus would discard in-progress edits and
         // reset the contentEditable cursor position.
         if (_lastFocusedPanel == FocusedPanel.Preview) return;
-        UpdatePreview();
+        _ = UpdatePreviewAsync();
     }
 
     private void EditorSyncTimer_Tick(object? sender, object e)
@@ -458,11 +675,7 @@ public sealed partial class MainWindow : Window
                 // to UIA (IValueProvider.Value). Suppressing TextChanged here causes
                 // the UIA state to be stale for single-character content, making Appium
                 // read "" instead of the new text on the next tick.
-                EditorTextBox.Text = rawText;
-                EditorTextBox.SelectionStart = EditorTextBox.Text.Length;
-                _document.Content = EditorTextBox.Text;
-                UpdateTitle();
-                UpdateStatusBar();
+                ApplyEditorDocumentUpdate(rawText, rawText.Length, 0);
                 _previewTimer.Stop();
                 _previewTimer.Start();
             }
@@ -477,14 +690,16 @@ public sealed partial class MainWindow : Window
         var currentText = EditorTextBox.Text;
         if (currentText == _document.Content) return;
         _document.Content = currentText;
+        InvalidateSelectionProjection();
         UpdateStatusBar();
     }
 
-    private async void UpdatePreview()
+    private async Task UpdatePreviewAsync(bool forceWhenPreviewFocused = false, PreviewSelectionPayload? previewSelectionToRestore = null)
     {
         if (!_webViewReady) return;
         if (_suppressPreviewSync) return;
         if (_isUpdatingPreview) return;
+        if (!forceWhenPreviewFocused && _lastFocusedPanel == FocusedPanel.Preview) return;
 
         _isUpdatingPreview = true;
         try
@@ -506,6 +721,15 @@ public sealed partial class MainWindow : Window
                 await tcs.Task;
                 PreviewWebView.NavigationCompleted -= OnNavCompleted;
                 _previewInitialized = true;
+
+                if (previewSelectionToRestore is not null && _lastFocusedPanel == FocusedPanel.Preview)
+                {
+                    await RestorePreviewSelectionAsync(previewSelectionToRestore);
+                }
+                else
+                {
+                    SyncEditorSelectionToPreview();
+                }
             }
             else
             {
@@ -514,10 +738,18 @@ public sealed partial class MainWindow : Window
                 var bodyHtml = MarkdownParser.ToHtmlFragment(_document.Content);
                 var escapedHtml = JsonSerializer.Serialize(bodyHtml);
                 await PreviewWebView.CoreWebView2.ExecuteScriptAsync($"updateContent({escapedHtml});");
-                // updateContent() replaces body.innerHTML, which destroys the DOM nodes
-                // held by any active CSS Custom Highlight range.  Re-apply the current
-                // editor selection so both panes keep their highlight in sync.
-                SyncEditorSelectionToPreview();
+
+                if (previewSelectionToRestore is not null && _lastFocusedPanel == FocusedPanel.Preview)
+                {
+                    await RestorePreviewSelectionAsync(previewSelectionToRestore);
+                }
+                else
+                {
+                    // updateContent() replaces body.innerHTML, which destroys the DOM nodes
+                    // held by any active CSS Custom Highlight range.  Re-apply the current
+                    // editor selection so both panes keep their highlight in sync.
+                    SyncEditorSelectionToPreview();
+                }
             }
         }
         catch
@@ -529,6 +761,11 @@ public sealed partial class MainWindow : Window
             RefreshAutomationState();
             _isUpdatingPreview = false;
         }
+    }
+
+    private void UpdatePreview()
+    {
+        _ = UpdatePreviewAsync();
     }
 
     private void UpdateStatusBar()
@@ -574,6 +811,8 @@ public sealed partial class MainWindow : Window
         AutomationViewMode.Text = _viewMode.ToString();
         AutomationEditorSelectionStart.Text = EditorTextBox.SelectionStart.ToString();
         AutomationEditorSelectionLength.Text = EditorTextBox.SelectionLength.ToString();
+        AutomationPreviewSelectionStart.Text = _lastMirroredPreviewSelectionStart.ToString();
+        AutomationPreviewSelectionLength.Text = _lastMirroredPreviewSelectionLength.ToString();
     }
 
     private void SetAutomationSyncSource(string source)
@@ -605,12 +844,8 @@ public sealed partial class MainWindow : Window
         }
 
         _document.Reset();
-        _suppressTextChanged = true;
-        EditorTextBox.Text = string.Empty;
-        _suppressTextChanged = false;
+        ApplyEditorDocumentUpdate(string.Empty, 0, 0);
         _previewInitialized = false;
-        UpdateTitle();
-        UpdateStatusBar();
         UpdatePreview();
     }
 
@@ -654,14 +889,9 @@ public sealed partial class MainWindow : Window
             var content = await File.ReadAllTextAsync(path);
             _document.Reset();
             _document.FilePath = path;
-            _suppressTextChanged = true;
-            EditorTextBox.Text = content;
-            _suppressTextChanged = false;
-            _document.Content = content;
+            ApplyEditorDocumentUpdate(content, 0, 0);
             _document.MarkSaved();
             _previewInitialized = false;
-            UpdateTitle();
-            UpdateStatusBar();
             UpdatePreview();
         }
         catch (Exception ex)
@@ -1069,46 +1299,75 @@ public sealed partial class MainWindow : Window
     /// </summary>
     private async Task SyncPreviewSelectionToEditorAsync()
     {
-        if (!_webViewReady || PreviewWebView.CoreWebView2 == null) return;
-        try
+        PreviewSelectionPayload? selection = null;
+
+        if (_lastFocusedPanel == FocusedPanel.Preview && _lastCommittedPreviewSelection is not null)
         {
-            var result = await PreviewWebView.CoreWebView2.ExecuteScriptAsync(
-                "window.getSelection() ? window.getSelection().toString() : ''");
-            if (string.IsNullOrEmpty(result) || result is "\"\"" or "null") return;
-
-            var selectedText = JsonSerializer.Deserialize<string>(result);
-            if (string.IsNullOrEmpty(selectedText)) return;
-
-            var editorText = EditorTextBox.Text;
-            var (index, matchedLength) = MarkdownFormatter.FindPreviewTextInEditor(editorText, selectedText);
-            if (index < 0) return;
-
-            var (expandedStart, expandedLength) =
-                MarkdownFormatter.ExpandToMarkdownBounds(editorText, index, matchedLength);
-            EditorTextBox.SelectionStart = expandedStart;
-            EditorTextBox.SelectionLength = expandedLength;
+            selection = ClonePreviewSelection(_lastCommittedPreviewSelection);
         }
-        catch
+        else
         {
-            // Swallow WebView2 script execution errors
+            selection = await GetPreviewSelectionAsync();
         }
+
+        if (selection is null) return;
+
+        var projection = GetSelectionProjection();
+        var (sourceStart, sourceLength) = projection.MapVisibleSelectionToSource(
+            selection.Start,
+            selection.Length,
+            includeMarkdownDelimitersWhenFullySelected: true);
+
+        EditorTextBox.SelectionStart = sourceStart;
+        EditorTextBox.SelectionLength = sourceLength;
+    }
+
+    /// <summary>
+    /// Synchronously mirrors the cached preview source-offset selection back into the editor
+    /// immediately before a formatting command runs.
+    /// Using the cache avoids an async DOM round-trip that would race with toolbar focus
+    /// changes and result in the editor selection being derived from the wrong DOM state.
+    /// No-ops when the last focused panel is not the preview.
+    /// </summary>
+    private void SyncCachedPreviewSelectionToEditor()
+    {
+        if (_lastFocusedPanel != FocusedPanel.Preview)
+            return;
+
+        ApplyEditorSelectionFromPreview(_lastMirroredPreviewSelectionStartInEditor, _lastMirroredPreviewSelectionLengthInEditor);
     }
 
     private async Task ApplyFormattingAsync(Func<string, int, int, FormattingResult> formatter)
     {
+        var previewOwnedSelection = _lastFocusedPanel == FocusedPanel.Preview;
         if (_lastFocusedPanel == FocusedPanel.Preview)
-            await SyncPreviewSelectionToEditorAsync();
-        ApplyFormatting(formatter);
+            SyncCachedPreviewSelectionToEditor();
+
+        var result = ApplyFormatting(formatter);
+
+        if (previewOwnedSelection)
+        {
+            CachePreviewSelectionInEditor(result.NewSelectionStart, result.NewSelectionLength);
+            await UpdatePreviewAsync(forceWhenPreviewFocused: true, previewSelectionToRestore: GetVisibleSelectionForEditorRange(result.NewSelectionStart, result.NewSelectionLength));
+        }
     }
 
     private async Task ApplyLineFormattingAsync(Func<string, int, FormattingResult> formatter)
     {
+        var previewOwnedSelection = _lastFocusedPanel == FocusedPanel.Preview;
         if (_lastFocusedPanel == FocusedPanel.Preview)
-            await SyncPreviewSelectionToEditorAsync();
-        ApplyLineFormatting(formatter);
+            SyncCachedPreviewSelectionToEditor();
+
+        var result = ApplyLineFormatting(formatter);
+
+        if (previewOwnedSelection)
+        {
+            CachePreviewSelectionInEditor(result.NewSelectionStart, result.NewSelectionLength);
+            await UpdatePreviewAsync(forceWhenPreviewFocused: true, previewSelectionToRestore: GetVisibleSelectionForEditorRange(result.NewSelectionStart, result.NewSelectionLength));
+        }
     }
 
-    private void ApplyFormatting(Func<string, int, int, FormattingResult> formatter)
+    private FormattingResult ApplyFormatting(Func<string, int, int, FormattingResult> formatter)
     {
         var text = EditorTextBox.Text;
         var selStart = EditorTextBox.SelectionStart;
@@ -1116,37 +1375,23 @@ public sealed partial class MainWindow : Window
 
         var result = formatter(text, selStart, selLen);
 
-        _suppressTextChanged = true;
-        EditorTextBox.Text = result.NewText;
-        EditorTextBox.SelectionStart = result.NewSelectionStart;
-        EditorTextBox.SelectionLength = result.NewSelectionLength;
-        _suppressTextChanged = false;
-
-        _document.Content = EditorTextBox.Text;
-        UpdateTitle();
-        UpdateStatusBar();
+        ApplyEditorDocumentUpdate(result.NewText, result.NewSelectionStart, result.NewSelectionLength);
         _previewTimer.Stop();
         _previewTimer.Start();
+        return result;
     }
 
-    private void ApplyLineFormatting(Func<string, int, FormattingResult> formatter)
+    private FormattingResult ApplyLineFormatting(Func<string, int, FormattingResult> formatter)
     {
         var text = EditorTextBox.Text;
         var selStart = EditorTextBox.SelectionStart;
 
         var result = formatter(text, selStart);
 
-        _suppressTextChanged = true;
-        EditorTextBox.Text = result.NewText;
-        EditorTextBox.SelectionStart = result.NewSelectionStart;
-        EditorTextBox.SelectionLength = result.NewSelectionLength;
-        _suppressTextChanged = false;
-
-        _document.Content = EditorTextBox.Text;
-        UpdateTitle();
-        UpdateStatusBar();
+        ApplyEditorDocumentUpdate(result.NewText, result.NewSelectionStart, result.NewSelectionLength);
         _previewTimer.Stop();
         _previewTimer.Start();
+        return result;
     }
 
     private void MenuBold_Click(object sender, RoutedEventArgs e)
@@ -1163,23 +1408,23 @@ public sealed partial class MainWindow : Window
 
     private async Task InsertHeadingAsync(int level)
     {
+        var previewOwnedSelection = _lastFocusedPanel == FocusedPanel.Preview;
         if (_lastFocusedPanel == FocusedPanel.Preview)
-            await SyncPreviewSelectionToEditorAsync();
+            SyncCachedPreviewSelectionToEditor();
 
         var text = EditorTextBox.Text;
         var selStart = EditorTextBox.SelectionStart;
         var result = MarkdownFormatter.InsertHeading(text, selStart, level);
 
-        _suppressTextChanged = true;
-        EditorTextBox.Text = result.NewText;
-        EditorTextBox.SelectionStart = result.NewSelectionStart;
-        _suppressTextChanged = false;
-
-        _document.Content = EditorTextBox.Text;
-        UpdateTitle();
-        UpdateStatusBar();
+        ApplyEditorDocumentUpdate(result.NewText, result.NewSelectionStart, result.NewSelectionLength);
         _previewTimer.Stop();
         _previewTimer.Start();
+
+        if (previewOwnedSelection)
+        {
+            CachePreviewSelectionInEditor(result.NewSelectionStart, result.NewSelectionLength);
+            await UpdatePreviewAsync(forceWhenPreviewFocused: true, previewSelectionToRestore: GetVisibleSelectionForEditorRange(result.NewSelectionStart, result.NewSelectionLength));
+        }
     }
 
     private void MenuHeading1_Click(object sender, RoutedEventArgs e) => _ = InsertHeadingAsync(1);
@@ -1215,23 +1460,23 @@ public sealed partial class MainWindow : Window
 
     private async void MenuInsertTable_Click(object sender, RoutedEventArgs e)
     {
+        var previewOwnedSelection = _lastFocusedPanel == FocusedPanel.Preview;
         if (_lastFocusedPanel == FocusedPanel.Preview)
-            await SyncPreviewSelectionToEditorAsync();
+            SyncCachedPreviewSelectionToEditor();
 
         var text = EditorTextBox.Text;
         var selStart = EditorTextBox.SelectionStart;
         var result = MarkdownFormatter.InsertTable(text, selStart, 3, 3);
 
-        _suppressTextChanged = true;
-        EditorTextBox.Text = result.NewText;
-        EditorTextBox.SelectionStart = result.NewSelectionStart;
-        _suppressTextChanged = false;
-
-        _document.Content = EditorTextBox.Text;
-        UpdateTitle();
-        UpdateStatusBar();
+        ApplyEditorDocumentUpdate(result.NewText, result.NewSelectionStart, result.NewSelectionLength);
         _previewTimer.Stop();
         _previewTimer.Start();
+
+        if (previewOwnedSelection)
+        {
+            CachePreviewSelectionInEditor(result.NewSelectionStart, result.NewSelectionLength);
+            await UpdatePreviewAsync(forceWhenPreviewFocused: true, previewSelectionToRestore: GetVisibleSelectionForEditorRange(result.NewSelectionStart, result.NewSelectionLength));
+        }
     }
 
     #endregion
@@ -1359,10 +1604,19 @@ public sealed partial class MainWindow : Window
     }
 
     private async void AutomationPreviewSelectBridgeButton_Click(object sender, RoutedEventArgs e)
-        => await ApplyPreviewSelectionToEditor("""{"type":"selectionChanged","text":"bridge"}""", performFocusDance: false);
+        => await ApplyPreviewSelectionToEditor("""{"type":"selectionChanged","start":8,"length":6}""", performFocusDance: false);
 
     private async void AutomationPreviewSelectBoldTextButton_Click(object sender, RoutedEventArgs e)
-        => await ApplyPreviewSelectionToEditor("""{"type":"selectionChanged","text":"preview bold text"}""", performFocusDance: false);
+        => await ApplyPreviewSelectionToEditor("""{"type":"selectionChanged","start":0,"length":17}""", performFocusDance: false);
+
+    private async void AutomationPreviewSelectBoldPartialButton_Click(object sender, RoutedEventArgs e)
+        => await ApplyPreviewSelectionToEditor("""{"type":"selectionChanged","start":0,"length":2}""", performFocusDance: false);
+
+    private void AutomationEditorSelectBoldFullButton_Click(object sender, RoutedEventArgs e)
+        => EditorTextBox.Select(0, Math.Min(8, EditorTextBox.Text.Length));
+
+    private void AutomationEditorSelectBoldPartialButton_Click(object sender, RoutedEventArgs e)
+        => EditorTextBox.Select(Math.Min(2, EditorTextBox.Text.Length), Math.Min(2, Math.Max(0, EditorTextBox.Text.Length - 2)));
 
     /// <summary>
     /// Sets the editor text to the value of <see cref="AutomationEditorInput"/> and updates all
