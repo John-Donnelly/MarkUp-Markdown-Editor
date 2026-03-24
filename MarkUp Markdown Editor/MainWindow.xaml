@@ -276,7 +276,7 @@
                 Grid.RowSpan="4"
                 HorizontalAlignment="Left"
                 VerticalAlignment="Top"
-                Width="20"
+                Width="28"
                 Height="10"
                 IsHitTestVisible="True"
                 AutomationProperties.AutomationId="AutomationBridgePanel">
@@ -367,6 +367,27 @@
                     Content="APSBT"
                     Click="AutomationPreviewSelectBoldTextButton_Click"
                     AutomationProperties.AutomationId="AutomationPreviewSelectBoldTextButton" />
+            <Button x:Name="AutomationPreviewSelectBoldPartialButton"
+                    Canvas.Left="18" Canvas.Top="0"
+                    Width="1" Height="1" Padding="0" MinWidth="0" MinHeight="0"
+                    Opacity="0.01"
+                    Content="APSBP"
+                    Click="AutomationPreviewSelectBoldPartialButton_Click"
+                    AutomationProperties.AutomationId="AutomationPreviewSelectBoldPartialButton" />
+            <Button x:Name="AutomationEditorSelectBoldFullButton"
+                    Canvas.Left="20" Canvas.Top="0"
+                    Width="1" Height="1" Padding="0" MinWidth="0" MinHeight="0"
+                    Opacity="0.01"
+                    Content="AESBF"
+                    Click="AutomationEditorSelectBoldFullButton_Click"
+                    AutomationProperties.AutomationId="AutomationEditorSelectBoldFullButton" />
+            <Button x:Name="AutomationEditorSelectBoldPartialButton"
+                    Canvas.Left="22" Canvas.Top="0"
+                    Width="1" Height="1" Padding="0" MinWidth="0" MinHeight="0"
+                    Opacity="0.01"
+                    Content="AESBP"
+                    Click="AutomationEditorSelectBoldPartialButton_Click"
+                    AutomationProperties.AutomationId="AutomationEditorSelectBoldPartialButton" />
             <!-- Selection state exposed for SelectionParityTests -->
             <TextBlock x:Name="AutomationEditorSelectionStart"
                        Canvas.Left="0" Canvas.Top="4"
@@ -376,6 +397,14 @@
                        Canvas.Left="2" Canvas.Top="4"
                        Width="1" Height="1" Opacity="0.01" Text="0"
                        AutomationProperties.AutomationId="AutomationEditorSelectionLength" />
+            <TextBlock x:Name="AutomationPreviewSelectionStart"
+                       Canvas.Left="4" Canvas.Top="4"
+                       Width="1" Height="1" Opacity="0.01" Text="0"
+                       AutomationProperties.AutomationId="AutomationPreviewSelectionStart" />
+            <TextBlock x:Name="AutomationPreviewSelectionLength"
+                       Canvas.Left="6" Canvas.Top="4"
+                       Width="1" Height="1" Opacity="0.01" Text="0"
+                       AutomationProperties.AutomationId="AutomationPreviewSelectionLength" />
         </Canvas>
 
         <!-- Main Content: Editor + Preview -->
