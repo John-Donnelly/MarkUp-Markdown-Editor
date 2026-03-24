@@ -742,21 +742,39 @@ public class MarkdownParserTests
     }
 
     [TestMethod]
-    public void ToHtml_EditableContainsHighlightTextFunction()
+    public void ToHtml_EditableContainsMirroredSelectionFunction()
     {
-        // The preview HTML must include the highlightText() function for
-        // cross-pane selection mirroring.
+        // The preview HTML must expose a visible-offset highlight function for
+        // editor→preview selection mirroring.
         var result = MarkdownParser.ToHtml("Hello", editable: true);
-        Assert.IsTrue(result.Contains("highlightText"));
+        Assert.IsTrue(result.Contains("setMirroredSelection"));
     }
 
     [TestMethod]
-    public void ToHtml_EditableContainsSelectionChangedMessage()
+    public void ToHtml_EditableContainsOffsetSelectionMessage()
     {
-        // The preview JS must post selectionChanged messages so the host
-        // can mirror the preview selection back into the editor.
+        // The preview JS must post visible offset ranges so the host can
+        // mirror preview selections back into markdown source coordinates.
         var result = MarkdownParser.ToHtml("Hello", editable: true);
         Assert.IsTrue(result.Contains("selectionChanged"));
+        Assert.IsTrue(result.Contains("start: offsets.start"));
+    }
+
+    [TestMethod]
+    public void ToHtml_EditableContentChangedMessageContainsSelectionOffsets()
+    {
+        var result = MarkdownParser.ToHtml("Hello", editable: true);
+        Assert.IsTrue(result.Contains("type: 'contentChanged'"));
+        Assert.IsTrue(result.Contains("start: selection.start"));
+        Assert.IsTrue(result.Contains("length: selection.length"));
+    }
+
+    [TestMethod]
+    public void ToHtml_EditableContainsNativeSelectionRestoreFunction()
+    {
+        var result = MarkdownParser.ToHtml("Hello", editable: true);
+        Assert.IsTrue(result.Contains("setSelectionOffsets"));
+        Assert.IsTrue(result.Contains("sel.removeAllRanges()"));
     }
 
     [TestMethod]
@@ -770,14 +788,27 @@ public class MarkdownParserTests
     }
 
     [TestMethod]
-    public void ToHtml_EditableContainsRequestAnimationFrameHighlight()
+    public void ToHtml_EditableCommitsSelectionOnPointerAndKeyboardRelease()
     {
-        // The CSS Custom Highlight must be applied via requestAnimationFrame so that
-        // it is updated in a single paint, and the highlight persists regardless of
-        // WebView2 focus state (unlike the browser's native DOM selection).
+        // Preview→editor sync must fire only when the user commits the selection.
         var result = MarkdownParser.ToHtml("Hello", editable: true);
-        Assert.IsTrue(result.Contains("requestAnimationFrame"));
-        Assert.IsTrue(result.Contains("selectionAF"));
+        Assert.IsTrue(result.Contains("pointerup"));
+        Assert.IsTrue(result.Contains("keyup"));
+    }
+
+    [TestMethod]
+    public void ToHtml_EditableCommittedSelectionSupportsCollapsedCarets()
+    {
+        var result = MarkdownParser.ToHtml("Hello", editable: true);
+        Assert.IsTrue(result.Contains("sel.rangeCount === 0"));
+        Assert.IsFalse(result.Contains("sel.rangeCount === 0 || sel.isCollapsed"));
+    }
+
+    [TestMethod]
+    public void ToHtml_EditableDoesNotContainIntermediateSelectionChangingMessage()
+    {
+        var result = MarkdownParser.ToHtml("Hello", editable: true);
+        Assert.IsFalse(result.Contains("selectionChanging"));
     }
 
     [TestMethod]
@@ -786,8 +817,8 @@ public class MarkdownParserTests
         // The non-editable (read-only preview) mode has no selectionchange or
         // highlightText machinery — it only needs the click/link handler.
         var result = MarkdownParser.ToHtml("Hello", editable: false);
-        Assert.IsFalse(result.Contains("highlightText"));
+        Assert.IsFalse(result.Contains("setMirroredSelection"));
         Assert.IsFalse(result.Contains("selectionChanged"));
-        Assert.IsFalse(result.Contains("requestAnimationFrame"));
+        Assert.IsFalse(result.Contains("getSelectionOffsets"));
     }
 }

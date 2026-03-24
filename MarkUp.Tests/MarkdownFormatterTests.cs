@@ -548,11 +548,10 @@ public class MarkdownFormatterTests
     [TestMethod]
     public void ToggleItalic_OnBoldItalicSelection_RemovesItalicLeavesBold()
     {
-        // After applying italic then bold (producing "***hello***"), clicking italic again
-        // on the outer "***" cannot isolate the inner "*" — so the result is a further wrap.
-        // This documents the known behaviour: use bold-remove first, then italic-remove.
+        // After combining bold and italic (producing "***hello***"), clicking italic again
+        // must remove only the italic layer and leave bold intact.
         var result = MarkdownFormatter.ToggleItalic("***hello***", 0, 11);
-        Assert.AreEqual("****hello****", result.NewText);
+        Assert.AreEqual("**hello**", result.NewText);
     }
 
     // ── StripInlineMarkdown ───────────────────────────────────────────────────
