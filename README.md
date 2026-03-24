@@ -46,19 +46,6 @@ A modern, dark-mode Markdown editor and viewer for Windows, built with WinUI 3 a
 | Zoom In | Ctrl++ |
 | Zoom Out | Ctrl+- |
 
-## Architecture
-
-- **MarkUp Markdown Editor** — WinUI 3 application (main project)
-- **MarkUp.Core** — Class library with markdown parsing, formatting, document model, HTML-to-Markdown conversion, and export logic
-- **MarkUp.Tests** — MSTest unit tests for the core library (151 tests)
-
-## Building
-
-Requires:
-- .NET 8.0 SDK
-- Windows App SDK 1.8
-- Visual Studio 2022 or later with WinUI workload
-
 ## License
 
 © 2026 JAD Apps. All rights reserved.
