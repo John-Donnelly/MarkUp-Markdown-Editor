@@ -2,6 +2,63 @@
 
 All notable changes to MarkUp Markdown Editor will be documented in this file.
 
+## [1.6.0] - 2025-07-25
+
+### Added
+- **Full bidirectional editing with toolbar formatting from the preview pane**: All toolbar
+  formatting commands (Bold, Italic, Strikethrough, Inline Code, Heading, Table) now work
+  correctly when the preview pane is focused. The selection made in the preview is preserved
+  across formatting operations and the preview DOM selection is restored after every re-render,
+  making formatting feel instantaneous.
+- **`MarkdownSelectionProjection`**: New core library class that maps visible character offsets
+  in the rendered preview to their corresponding Markdown source offsets (and back), accounting
+  for inline syntax markers (`**`, `*`, `~~`, `` ` ``) that are invisible in the preview but
+  occupy characters in the source.
+- **Offset-based preview selection protocol**: The preview now posts `selectionChanged` and
+  `contentChanged` messages with integer `start`/`length` fields rather than raw selected-text
+  strings, enabling precise round-trip selection mapping without text-search ambiguity.
+- **`setSelectionOffsets(start, length)` JS function**: Injected into the preview WebView to
+  restore a native DOM selection or caret from host-supplied visible-character offsets after a
+  preview re-render. Supports both ranged selections and collapsed carets.
+- **Collapsed-caret support throughout selection sync**: Single-click cursor positions in the
+  preview are now tracked and restored, not just drag-selected ranges.
+- **`setMirroredSelection(start, length)` replaces `highlightText(text)`**: The editor→preview
+  CSS Custom Highlight is now positioned using offset coordinates rather than text search,
+  eliminating false matches when the same text appears more than once in a document.
+
+### Fixed
+- **Bold+italic toggle regression**: Toggling italic off on a `***bold italic***` selection now
+  correctly produces `**bold**` instead of adding extra markers. A new
+  `TryRemoveTripleAsteriskCombination` path handles the bold+italic unwrap case explicitly.
+- **Nested marker removal**: Toggling a single-char marker on a span that is already wrapped by
+  that marker inside a broader run (e.g. italic inside bold-italic) now strips both layers
+  cleanly instead of re-wrapping.
+- **Preview timer no longer interrupts preview-owned editing**: The debounce timer that
+  re-renders the preview from the editor is suppressed while the preview pane has focus,
+  preventing in-progress preview edits from being clobbered.
+- **WebView2 message payload double-encoding**: `NormalizeWebMessagePayload` now unwraps the
+  outer JSON-string layer that WebView2 adds around `postMessage(JSON.stringify(...))` calls,
+  fixing a bug where all structured messages were silently dropped.
+
+### Changed
+- Preview selection messages switched from text-based (`"text"` field) to offset-based
+  (`"start"` / `"length"` fields) for all `selectionChanged` and `contentChanged` payloads.
+- `getSelectionOffsets()` and `postCommittedSelection()` JS functions now allow collapsed
+  carets (previously guarded by `sel.isCollapsed`).
+- `buildTextMap()` extracted as a shared JS helper used by both `setMirroredSelection` and
+  `setSelectionOffsets`.
+- `_awaitingUserInput` JS flag renamed to `_selectionMessagesSuppressed` for clarity.
+
+### Tests
+- **New `MarkdownSelectionProjectionTests`** (56 unit tests): full coverage of
+  source↔visible offset mapping for bold, italic, strikethrough, inline code, mixed
+  formatting, and collapsed carets.
+- **9 new `MarkdownParserTests`**: verify `contentChanged` payload includes selection offsets,
+  `setSelectionOffsets` is emitted in editable mode, and `postCommittedSelection` supports
+  collapsed carets.
+- **Updated `MarkdownFormatterTests`**: corrected `ToggleItalic_OnBoldItalicSelection`
+  expectation and added `TryRemoveTripleAsteriskCombination` / `TryRemoveNestedMarker` cases.
+
 ## [1.5.1] - 2025-07-14
 
 ### Fixed
