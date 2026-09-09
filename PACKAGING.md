@@ -84,9 +84,9 @@ one file). Without it you get a dev-signed sideload bundle under
 - [ ] `<Version>` in `MarkUp Markdown Editor.csproj` updated.
 - [ ] `Package.appxmanifest` `Version` attribute updated (format `X.Y.Z.0`).
 - [ ] `CHANGELOG.md` entry added with the correct date (`git log -1 --format=%ad --date=short`).
-- [ ] `jad-apps-site`: `data/news.json` item added, `data/sync-state.json` advanced, `data/studio-projects.ts` refreshed.
+- [ ] Production `jad-apps-site-git`: `data/news.json` item added, `data/sync-state.json` advanced, `data/studio-projects.ts` refreshed. Do not update the stale `jad-apps-site` Pages project.
 - [ ] `PublishTrimmed` is `False` — verify before every Store build.
 - [ ] Store package built and smoke-tested locally (sideload or clean VM).
-- [ ] `.msixbundle` + `.appxsym` files uploaded to Partner Center.
+- [ ] Partner Center upload uses the generated `*_bundle.msixupload` artefact; it already contains the `.msixbundle` and `.appxsym` files.
 - [ ] Submission certified and published.
 - [ ] Git tag created: `git tag v<version> && git push origin v<version>`.

@@ -15,8 +15,9 @@ nearly shipped — do not skip them.
       commit date (`git log -1 --format=%ad --date=short`); no lingering
       `[Unreleased]` items that shipped
 - [ ] `README.md` feature list and shortcut table match what the build actually does
-- [ ] `jad-apps-site` (Z:\Projects\JAD-Apps): `data/news.json` item added, `data/sync-state.json`
-      advanced, `data/studio-projects.ts` refreshed (`app.js` no longer exists)
+- [ ] Production `jad-apps-site-git` (JAD Apps site repository): `data/news.json` item added,
+      `data/sync-state.json` advanced, `data/studio-projects.ts` refreshed (`app.js` no longer
+      exists). Do not update the stale `jad-apps-site` Pages project.
 - [ ] About dialog shows the new version (auto-derived, but eyeball it)
 
 ## 2 — Automated verification
@@ -152,13 +153,14 @@ nearly shipped — do not skip them.
 - [ ] Build the multi-arch Release bundle per `PACKAGING.md`
       (`-p:Platform=x64`, `UapAppxPackageBuildMode=StoreUpload`, `AppxBundle=Always`,
       `x86|x64|ARM64`) — `PublishTrimmed` must remain `False`; ReadyToRun is
-      auto-disabled for bundles (NETSDK1094 guard). Upload the `.msixupload`, not the
-      dev-signed `_Test` bundle
+      auto-disabled for bundles (NETSDK1094 guard). Use the generated `*_bundle.msixupload`
+      for Partner Center; do not upload the dev-signed `_Test` bundle.
 - [ ] Install the `.msixbundle` fresh on a machine (or after uninstalling the
       dev build) and smoke-test: launch, type, preview, save, print preview
 - [ ] Packaged app icon, display name, and file associations correct
-- [ ] Upload `.msixbundle` + `.appxsym` to Partner Center; listing screenshots
-      still representative (retake if the UI changed visibly)
+- [ ] Upload the generated `*_bundle.msixupload` to Partner Center. It contains the
+      `.msixbundle` and per-architecture `.appxsym` symbol files.
+- [ ] Listing screenshots still representative (retake if the UI changed visibly)
 
 ## 12 — After submission
 
